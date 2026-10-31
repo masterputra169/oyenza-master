@@ -18,9 +18,10 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio
 const TIMEOUT: Duration = Duration::from_secs(6);
 const REFRESH_GAP: Duration = Duration::from_secs(120); // 2 minutes while open
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Watch {
     pub open: bool,
+    pub chart: Option<String>,
 }
 
 pub struct ForexService {
@@ -84,6 +85,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let http = Client::new(USER_AGENT).ok();
     let (lock, cvar) = &*state;
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
+    let mut history_cache: HashMap<String, Instant> = HashMap::new();
+    let mut latest_idr = 18133.0;
+    let mut board_delivered = false;
 
     loop {
         let watch = {
@@ -107,94 +111,225 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             continue;
         }
 
-        last_ask = Instant::now();
-        let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let elapsed = last_ask.elapsed();
+        let query_board = !board_delivered || elapsed >= REFRESH_GAP;
 
-        if let Some(ref client) = http {
-            let mut rates_map = HashMap::new();
-            let mut feeds = CommodityFeeds::default();
+        if query_board {
+            last_ask = Instant::now();
+            let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
-            // 1. Primary FX provider: open.er-api.com
-            if let Ok(resp) = client.get("https://open.er-api.com/v6/latest/USD", TIMEOUT) {
-                if resp.status == 200 {
-                    if let Ok(er) = serde_json::from_str::<ExchangeApiResponse>(&resp.body) {
-                        rates_map = er.rates;
+            if let Some(ref client) = http {
+                let mut rates_map = HashMap::new();
+                let mut feeds = CommodityFeeds::default();
+
+                // 1. Primary FX provider: open.er-api.com
+                if let Ok(resp) = client.get("https://open.er-api.com/v6/latest/USD", TIMEOUT) {
+                    if resp.status == 200 {
+                        if let Ok(er) = serde_json::from_str::<ExchangeApiResponse>(&resp.body) {
+                            rates_map = er.rates;
+                        }
                     }
                 }
-            }
 
-            // 2. Fallback FX & Metals provider: jsdelivr currency-api
-            if let Ok(resp) = client.get("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", TIMEOUT) {
-                if resp.status == 200 {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
-                        if let Some(usd_obj) = v.get("usd").and_then(|u| u.as_object()) {
-                            if rates_map.is_empty() {
-                                for (k, val) in usd_obj {
-                                    if let Some(f) = val.as_f64() {
-                                        rates_map.insert(k.to_ascii_uppercase(), f);
+                // 2. Fallback FX & Metals provider: jsdelivr currency-api
+                if let Ok(resp) = client.get("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", TIMEOUT) {
+                    if resp.status == 200 {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+                            if let Some(usd_obj) = v.get("usd").and_then(|u| u.as_object()) {
+                                if rates_map.is_empty() {
+                                    for (k, val) in usd_obj {
+                                        if let Some(f) = val.as_f64() {
+                                            rates_map.insert(k.to_ascii_uppercase(), f);
+                                        }
                                     }
                                 }
-                            }
-                            if let Some(xau) = usd_obj.get("xau").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
-                                feeds.gold_usd = Some((1.0 / xau, -0.24));
-                            }
-                            if let Some(xag) = usd_obj.get("xag").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
-                                feeds.silver_usd = Some((1.0 / xag, 0.45));
+                                if let Some(xau) = usd_obj.get("xau").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
+                                    feeds.gold_usd = Some((1.0 / xau, -0.24));
+                                }
+                                if let Some(xag) = usd_obj.get("xag").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
+                                    feeds.silver_usd = Some((1.0 / xag, 0.45));
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // 3. Live Gold spot & 24h change from Binance PAXGUSDT
-            if let Ok(resp) = client.get("https://data-api.binance.vision/api/v3/ticker/24hr?symbol=PAXGUSDT", TIMEOUT) {
-                if resp.status == 200 {
-                    if let Ok(bt) = serde_json::from_str::<BinanceTickerResponse>(&resp.body) {
-                        if let Ok(p) = bt.last_price.parse::<f64>() {
-                            let pct = bt.price_change_pct.parse::<f64>().unwrap_or(-0.24);
-                            feeds.gold_usd = Some((p, pct));
+                // 3. Live Gold spot & 24h change from Binance PAXGUSDT
+                if let Ok(resp) = client.get("https://data-api.binance.vision/api/v3/ticker/24hr?symbol=PAXGUSDT", TIMEOUT) {
+                    if resp.status == 200 {
+                        if let Ok(bt) = serde_json::from_str::<BinanceTickerResponse>(&resp.body) {
+                            if let Ok(p) = bt.last_price.parse::<f64>() {
+                                let pct = bt.price_change_pct.parse::<f64>().unwrap_or(-0.24);
+                                feeds.gold_usd = Some((p, pct));
+                            }
                         }
                     }
                 }
-            }
 
-            // 4. Live Yahoo Finance spot & intraday sparklines for USD/IDR, WTI Oil, and Silver
-            if let Some((price, prev, sp)) = fetch_yahoo_intraday(client, "USDIDR=X") {
-                if price > 1000.0 {
-                    rates_map.insert("IDR".into(), price);
-                    if prev > 0.0 {
-                        feeds.pcts.insert("USD/IDR".into(), (price - prev) / prev * 100.0);
-                    }
-                    if sp.len() >= 2 {
-                        feeds.sparks.insert("USD/IDR".into(), sp);
-                    }
-                }
-            }
-            if let Some((price, prev, sp)) = fetch_yahoo_intraday(client, "CL=F") {
-                if price > 10.0 {
-                    let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { -0.62 };
-                    feeds.oil_usd = Some((price, pct));
-                    if sp.len() >= 2 {
-                        feeds.sparks.insert("OIL".into(), sp);
+                // 4. Live Yahoo Finance spot & intraday sparklines for USD/IDR, WTI Oil, and Silver
+                if let Some((price, prev, sp)) = fetch_yahoo_intraday(client, "USDIDR=X") {
+                    if price > 1000.0 {
+                        latest_idr = price;
+                        rates_map.insert("IDR".into(), price);
+                        if prev > 0.0 {
+                            feeds.pcts.insert("USD/IDR".into(), (price - prev) / prev * 100.0);
+                        }
+                        if sp.len() >= 2 {
+                            feeds.sparks.insert("USD/IDR".into(), sp);
+                        }
                     }
                 }
-            }
-            if let Some((price, prev, _)) = fetch_yahoo_intraday(client, "SI=F") {
-                if price > 5.0 {
-                    let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { 0.45 };
-                    feeds.silver_usd = Some((price, pct));
+                if let Some((price, prev, sp)) = fetch_yahoo_intraday(client, "CL=F") {
+                    if price > 10.0 {
+                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { -0.62 };
+                        feeds.oil_usd = Some((price, pct));
+                        if sp.len() >= 2 {
+                            feeds.sparks.insert("OIL".into(), sp);
+                        }
+                    }
                 }
-            }
+                if let Some((price, prev, _)) = fetch_yahoo_intraday(client, "SI=F") {
+                    if price > 5.0 {
+                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { 0.45 };
+                        feeds.silver_usd = Some((price, pct));
+                    }
+                }
 
-            let board = if !rates_map.is_empty() {
-                ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
+                if let Some(idr) = rates_map.get("IDR").copied().filter(|&x| x > 1000.0) {
+                    latest_idr = idr;
+                }
+
+                let board = if !rates_map.is_empty() {
+                    ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
+                } else {
+                    ForexBoard::default_board()
+                };
+                sink.send(AppEvent::Forex(board));
+                board_delivered = true;
             } else {
-                ForexBoard::default_board()
-            };
-            sink.send(AppEvent::Forex(board));
-        } else {
-            sink.send(AppEvent::Forex(ForexBoard::default_board()));
+                sink.send(AppEvent::Forex(ForexBoard::default_board()));
+                board_delivered = true;
+            }
         }
+
+        // Fetch authentic 1Y daily close history for the selected chart
+        if let Some(ref sym) = watch.chart {
+            let needs_fetch = history_cache.get(sym).map_or(true, |t| t.elapsed() > Duration::from_secs(300));
+            if needs_fetch {
+                if let Some(ref client) = http {
+                    if let Some(closes) = fetch_symbol_history(client, sym, latest_idr) {
+                        history_cache.insert(sym.clone(), Instant::now());
+                        sink.send(AppEvent::ForexHistory(poni_core::forex::ForexHistory {
+                            symbol: sym.clone(),
+                            closes,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn fetch_symbol_history(client: &Client, sym: &str, usdidr: f64) -> Option<Vec<(i32, f64)>> {
+    let norm = poni_core::forex::normalize_symbol(sym);
+    match norm.as_str() {
+        "USD/IDR" => fetch_yahoo_daily(client, "USDIDR=X", 1.0),
+        "EUR/IDR" => fetch_yahoo_daily(client, "EURIDR=X", 1.0),
+        "SGD/IDR" => fetch_yahoo_daily(client, "SGDIDR=X", 1.0),
+        "JPY/IDR" => fetch_yahoo_daily(client, "JPYIDR=X", 100.0),
+        "MYR/IDR" => fetch_yahoo_daily(client, "MYRIDR=X", 1.0),
+        "AUD/IDR" => fetch_yahoo_daily(client, "AUDIDR=X", 1.0),
+        "GBP/IDR" => fetch_yahoo_daily(client, "GBPIDR=X", 1.0),
+        "SAR/IDR" => fetch_yahoo_daily(client, "USDIDR=X", 1.0 / 3.75),
+        "CNY/IDR" => fetch_yahoo_daily(client, "USDIDR=X", 1.0 / 7.125),
+        "OIL" => fetch_yahoo_daily(client, "CL=F", 1.0),
+        "GOLD" => {
+            fetch_binance_gold_history(client, usdidr).or_else(|| {
+                let factor = (usdidr / poni_core::forex::TROY_OUNCE_GRAMS) * poni_core::forex::ANTAM_PREMIUM_FACTOR;
+                fetch_yahoo_daily(client, "GC=F", factor)
+            })
+        }
+        "SILVER" => {
+            let factor = (usdidr / poni_core::forex::TROY_OUNCE_GRAMS) * 1.05;
+            fetch_yahoo_daily(client, "SI=F", factor)
+        }
+        other => {
+            let ticker = if other.contains('/') {
+                let clean = other.replace('/', "");
+                format!("{clean}=X")
+            } else {
+                format!("{other}=F")
+            };
+            fetch_yahoo_daily(client, &ticker, 1.0)
+        }
+    }
+}
+
+fn fetch_binance_gold_history(client: &Client, usdidr: f64) -> Option<Vec<(i32, f64)>> {
+    let body = fetch_binance(client, "klines?symbol=PAXGUSDT&interval=1d&limit=365")?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let arr = json.as_array()?;
+    let factor = (usdidr / poni_core::forex::TROY_OUNCE_GRAMS) * poni_core::forex::ANTAM_PREMIUM_FACTOR;
+    let mut closes = Vec::with_capacity(arr.len());
+    for item in arr {
+        let row = item.as_array()?;
+        let time_ms = row.get(0)?.as_i64()?;
+        let close_str = row.get(4)?.as_str()?;
+        let close_usd: f64 = close_str.parse().ok()?;
+        if close_usd > 0.0 {
+            let day = (time_ms / 1000 / 86400) as i32;
+            closes.push((day, close_usd * factor));
+        }
+    }
+    if closes.len() >= 10 {
+        Some(closes)
+    } else {
+        None
+    }
+}
+
+fn fetch_binance(client: &Client, path_and_query: &str) -> Option<String> {
+    for base in ["https://data-api.binance.vision/api/v3", "https://api.binance.com/api/v3"] {
+        let url = format!("{base}/{path_and_query}");
+        if let Ok(resp) = client.get(&url, TIMEOUT) {
+            if resp.status == 200 && (resp.body.starts_with('[') || resp.body.starts_with('{')) {
+                return Some(resp.body);
+            }
+        }
+    }
+    None
+}
+
+fn fetch_yahoo_daily(client: &Client, ticker: &str, multiplier: f64) -> Option<Vec<(i32, f64)>> {
+    let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1y");
+    let resp = client.get(&url, TIMEOUT).ok()?;
+    if resp.status != 200 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(&resp.body).ok()?;
+    let res = v.get("chart")?.get("result")?.as_array()?.first()?;
+    let timestamps = res.get("timestamp")?.as_array()?;
+    let closes = res
+        .get("indicators")
+        .and_then(|i| i.get("quote"))
+        .and_then(|q| q.as_array())
+        .and_then(|a| a.first())
+        .and_then(|q0| q0.get("close"))
+        .and_then(|c| c.as_array())?;
+
+    let mut out = Vec::with_capacity(timestamps.len());
+    for (t, c) in timestamps.iter().zip(closes.iter()) {
+        if let (Some(ts), Some(val)) = (t.as_i64(), c.as_f64()) {
+            if val.is_finite() && val > 0.0 {
+                let day = (ts / 86400) as i32;
+                out.push((day, val * multiplier));
+            }
+        }
+    }
+    if out.len() >= 10 {
+        Some(out)
+    } else {
+        None
     }
 }
 

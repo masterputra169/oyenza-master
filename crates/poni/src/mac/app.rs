@@ -1822,6 +1822,10 @@ impl App {
                 self.check_price_alerts();
                 self.request_frame();
             }
+            AppEvent::ForexHistory(hist) => {
+                self.st.forex.years.insert(hist.symbol.clone(), hist);
+                self.request_frame();
+            }
             AppEvent::Usage(ev) => self.on_usage(ev),
             AppEvent::AdzanEnded => self.adzan_ended(),
             AppEvent::Log(s) => pinfo!("{s}"),
@@ -3019,7 +3023,13 @@ impl App {
             return;
         }
         self.forex_open = open;
-        let w = services::forex::Watch { open };
+        let chart = if open && self.st.ui.stocks_forex_mode && self.st.store.stocks.range != poni_core::stocks::Range::Day {
+            let pick = self.st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+            Some(poni_core::forex::normalize_symbol(&pick))
+        } else {
+            None
+        };
+        let w = services::forex::Watch { open, chart };
         if self.forex.is_none() && w.open {
             match services::forex::ForexService::start(self.sink.clone()) {
                 Ok(s) => self.forex = Some(s),

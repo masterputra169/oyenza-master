@@ -1492,7 +1492,7 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
 
     // Morphing Chart (1D, 1M, 6M, 1Y) matching Stocks & Crypto
     let chart = Rect::new(r.x, r.y + CHART_Y, r.w, CHART_H);
-    let line = forex_chart_line(&q, board.updated_at, range);
+    let line = forex_chart_line(st, &q, board.updated_at, range);
     let target = stocks::resample(&line.pts, SAMPLES);
 
     let now = ui.now;
@@ -1621,7 +1621,7 @@ fn forex_stats(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
     }
 }
 
-fn forex_chart_line(q: &poni_core::forex::ForexQuote, updated_at: u64, range: Range) -> Line {
+fn forex_chart_line(st: &AppState, q: &poni_core::forex::ForexQuote, updated_at: u64, range: Range) -> Line {
     let col = match q.trend() {
         1 => palette::GREEN,
         -1 => palette::RED,
@@ -1659,10 +1659,15 @@ fn forex_chart_line(q: &poni_core::forex::ForexQuote, updated_at: u64, range: Ra
         Range::Year => 365,
         Range::Day => 1,
     };
-    let hist = poni_core::forex::sample_history(&q.symbol, today, q.rate);
-    let raw_pts: Vec<(i32, f64)> = hist.closes.into_iter().filter(|(d, _)| *d >= today - days_back).collect();
+    let is_real_history = st.forex.years.contains_key(&q.symbol);
+    let raw_pts: Vec<(i32, f64)> = if let Some(h) = st.forex.years.get(&q.symbol) {
+        h.closes.iter().copied().filter(|(d, _)| *d >= today - days_back).collect()
+    } else {
+        let hist = poni_core::forex::sample_history(&q.symbol, today, q.rate);
+        hist.closes.into_iter().filter(|(d, _)| *d >= today - days_back).collect()
+    };
 
-    line.key = format!("fx/{}/{}/{}/{}", q.symbol, range.label(), raw_pts.len(), q.rate.to_bits());
+    line.key = format!("fx/{}/{}/{}/{}/{}", q.symbol, range.label(), raw_pts.len(), is_real_history, q.rate.to_bits());
     line.days = raw_pts.iter().map(|(d, _)| i64::from(*d)).collect();
     line.values = raw_pts.iter().map(|(_, p)| *p).collect();
     if let Some(last) = line.values.last_mut() {

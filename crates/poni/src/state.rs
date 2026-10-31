@@ -625,6 +625,7 @@ pub struct WeatherState {
 pub struct ForexState {
     pub board: Option<poni_core::forex::ForexBoard>,
     pub last_fetched: f64,
+    pub years: HashMap<String, poni_core::forex::ForexHistory>,
 }
 
 /// The Prayer times add-on's live state.
