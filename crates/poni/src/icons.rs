@@ -94,6 +94,8 @@ pub enum Icon {
     Stocks,
     /// The Crypto tab: a cryptocurrency coin.
     Crypto,
+    /// The Forex tab: currency exchange arrows.
+    Forex,
     /// A magnifying glass: the Stocks page's search.
     Search,
     /// The Record tab: a ring with the record dot inside.
@@ -372,6 +374,12 @@ pub fn parts(icon: Icon) -> &'static [Part] {
             s("M10 6v12"),
             s("M8 12h6a3 3 0 0 1 3 3a3 3 0 0 1-3 3H8"),
         ],
+        Forex => p![
+            s("M7 8h13"),
+            s("M16 4l4 4-4 4"),
+            s("M17 16H4"),
+            s("M8 12l-4 4 4 4"),
+        ],
         Search => p![s("M4.5 10.5a6 6 0 1 0 12 0a6 6 0 1 0-12 0"), s("M15 15l4.5 4.5")],
         Bell => p![s("M6 11a6 6 0 0 1 12 0v4.2l1.6 2.3H4.4L6 15.2z"), s("M10 20.3a2.2 2.2 0 0 0 4 0")],
         Notes => p![
@@ -507,7 +515,7 @@ mod tests {
         Icon::Sliders, Icon::Open, Icon::Phone, Icon::Eye, Icon::MoneyIn, Icon::MoneyOut, Icon::Transfer, Icon::Card, Icon::Wallet,
         Icon::Unlink, Icon::Gear,
         Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Moon, Icon::Sun, Icon::Stop, Icon::Script, Icon::Record, Icon::Download,
-        Icon::Stocks, Icon::Crypto, Icon::Search,
+        Icon::Stocks, Icon::Crypto, Icon::Forex, Icon::Search,
         Icon::Recorder, Icon::Screen, Icon::AppWindow, Icon::Area, Icon::Camera, Icon::Mic, Icon::Bell, Icon::Notes, Icon::Message,
         Icon::Ai, Icon::OpenAi, Icon::Claude, Icon::OpenCode, Icon::Gemini, Icon::Cursor, Icon::Copilot, Icon::Kimi, Icon::Zai,
         Icon::MiniMax, Icon::OpenRouter, Icon::Oyenza,

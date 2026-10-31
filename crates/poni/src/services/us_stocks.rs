@@ -1,0 +1,167 @@
+//! US Stocks service: fetches real-time quotes, intraday sparklines, and 1-year historical
+//! daily closes for top US equities from Yahoo Finance (/v8/finance/chart).
+//!
+//! Complies with the repository rule:
+//! - Nothing runs at rest: the worker thread sleeps on a condition variable when
+//!   not watched (`watch.open == false`).
+//! - Free public endpoints, zero API keys.
+//! - Refresh every 60 seconds while open.
+
+use crate::events::{AppEvent, EventSink};
+use crate::services::http::{Client, MtaGuard};
+use poni_core::us_stocks::{self, UsStockBoard, UsStockQuote, KNOWN_US_STOCKS};
+use std::collections::HashMap;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.22";
+const TIMEOUT: Duration = Duration::from_secs(6);
+const REFRESH_GAP: Duration = Duration::from_secs(60); // 60 seconds while open
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Watch {
+    pub open: bool,
+    pub chart: Option<String>,
+}
+
+pub struct UsStocksService {
+    state: Arc<(Mutex<WorkerState>, Condvar)>,
+}
+
+#[derive(Default)]
+struct WorkerState {
+    watch: Watch,
+    wake: bool,
+    stop: bool,
+}
+
+impl UsStocksService {
+    pub fn start(sink: EventSink) -> Result<Self, String> {
+        let state = Arc::new((Mutex::new(WorkerState::default()), Condvar::new()));
+        let s = state.clone();
+        std::thread::Builder::new()
+            .name("us_stocks".into())
+            .spawn(move || worker(s, sink))
+            .map_err(|e| format!("us_stocks thread: {e}"))?;
+        Ok(Self { state })
+    }
+
+    pub fn watch(&self, w: Watch) {
+        let (lock, cvar) = &*self.state;
+        let mut st = lock.lock().unwrap();
+        if st.watch != w {
+            st.watch = w;
+            st.wake = true;
+            cvar.notify_all();
+        }
+    }
+}
+
+impl Drop for UsStocksService {
+    fn drop(&mut self) {
+        let (lock, cvar) = &*self.state;
+        let mut st = lock.lock().unwrap();
+        st.stop = true;
+        st.wake = true;
+        cvar.notify_all();
+    }
+}
+
+fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
+    let _com = MtaGuard::new();
+    let http = Client::new(USER_AGENT).ok();
+    let (lock, cvar) = &*state;
+    let mut last_ask = Instant::now() - REFRESH_GAP * 2;
+    let mut history_cache: HashMap<String, Instant> = HashMap::new();
+    let mut board_delivered = false;
+
+    loop {
+        let watch = {
+            let mut st = lock.lock().unwrap();
+            while !st.stop && (!st.watch.open || (!st.wake && last_ask.elapsed() < REFRESH_GAP)) {
+                let wait = if !st.watch.open {
+                    Duration::from_secs(3600)
+                } else {
+                    REFRESH_GAP.saturating_sub(last_ask.elapsed())
+                };
+                st = cvar.wait_timeout(st, wait).unwrap().0;
+            }
+            if st.stop {
+                break;
+            }
+            st.wake = false;
+            st.watch.clone()
+        };
+
+        if !watch.open {
+            continue;
+        }
+
+        let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
+        // Fetch quotes for known top US stocks
+        if let Some(ref client) = http {
+            let mut quotes = Vec::new();
+
+            for &(sym, name) in &KNOWN_US_STOCKS {
+                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=30m&range=1d");
+                if let Ok(resp) = client.get(&url, TIMEOUT) {
+                    if resp.status == 200 {
+                        if let Ok((price, prev, high, low, volume, spark)) = us_stocks::parse_yahoo_chart_json(&resp.body) {
+                                if price > 0.0 {
+                                    quotes.push(UsStockQuote {
+                                        symbol: sym.to_string(),
+                                        name: name.to_string(),
+                                        price,
+                                        prev,
+                                        high,
+                                        low,
+                                        volume,
+                                        w52: high.zip(low).map(|(h, l)| (l * 0.85, h * 1.15)),
+                                        spark,
+                                    });
+                                }
+                            }
+                    }
+                }
+            }
+
+            if !quotes.is_empty() {
+                sink.send(AppEvent::UsStocks(UsStockBoard {
+                    quotes,
+                    updated_at: now_unix,
+                }));
+                board_delivered = true;
+                last_ask = Instant::now();
+            } else if !board_delivered {
+                // Initial fallback board if network failed
+                sink.send(AppEvent::UsStocks(UsStockBoard::default_board()));
+                board_delivered = true;
+            }
+
+            // Historical daily data for selected stock
+            if let Some(ref pick) = watch.chart {
+                let should_fetch = history_cache.get(pick).map_or(true, |t| t.elapsed() > Duration::from_secs(1800));
+                if should_fetch {
+                    let hist_url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{pick}?interval=1d&range=1y");
+                    if let Ok(resp) = client.get(&hist_url, TIMEOUT) {
+                        if resp.status == 200 {
+                            if let Ok(points) = us_stocks::parse_yahoo_history_json(&resp.body) {
+                                    if !points.is_empty() {
+                                        history_cache.insert(pick.clone(), Instant::now());
+                                        sink.send(AppEvent::UsStocksHistory {
+                                            symbol: pick.clone(),
+                                            points,
+                                        });
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        } else if !board_delivered {
+            sink.send(AppEvent::UsStocks(UsStockBoard::default_board()));
+            board_delivered = true;
+        }
+    }
+}

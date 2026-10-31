@@ -48,6 +48,7 @@ pub mod stocks;
 pub mod store;
 pub mod svgpath;
 pub mod sysmon;
+pub mod us_stocks;
 pub mod timeline;
 pub mod todo;
 pub mod ttml;

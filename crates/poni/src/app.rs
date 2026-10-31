@@ -486,6 +486,7 @@ pub struct App {
     weather_open: bool,
     /// Forex is active or on screen at the last look (`set_forex_watch`).
     forex_open: bool,
+    us_stocks_open: bool,
     /// The Today page is on screen: the worker asks for the day (`services::oyenza`).
     today_watch: bool,
     /// What the AI tab's worker was last told (`set_usage_watch`).
@@ -741,6 +742,7 @@ impl App {
             crypto_open: false,
             weather_open: false,
             forex_open: false,
+            us_stocks_open: false,
             today_watch: false,
             usage_watch: services::usage::Watch::default(),
             frames: None,
@@ -1546,6 +1548,8 @@ if self.grab.is_some() {
                 self.set_crypto_watch();
                 self.set_weather_watch();
                 self.set_forex_watch();
+        self.set_us_stocks_watch();
+                self.set_us_stocks_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -1566,6 +1570,8 @@ if self.grab.is_some() {
                 self.set_crypto_watch();
                 self.set_weather_watch();
                 self.set_forex_watch();
+        self.set_us_stocks_watch();
+                self.set_us_stocks_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -2144,12 +2150,12 @@ if self.grab.is_some() {
 
     fn set_forex_watch(&mut self) {
         let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "forex");
-        let open = (self.mode == Mode::Expanded(PageKind::Stocks) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none();
+        let open = (self.mode == Mode::Expanded(PageKind::Forex) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none() && self.st.forex_on();
         if !open && !self.forex_open {
             return;
         }
         self.forex_open = open;
-        let chart = if open && self.st.ui.stocks_forex_mode && self.st.store.stocks.range != poni_core::stocks::Range::Day {
+        let chart = if open && self.st.store.stocks.range != poni_core::stocks::Range::Day {
             let pick = self.st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
             Some(poni_core::forex::normalize_symbol(&pick))
         } else {
@@ -2157,6 +2163,24 @@ if self.grab.is_some() {
         };
         if let Some(s) = self.services.as_ref() {
             s.forex_watch(services::forex::Watch { open, chart });
+        }
+    }
+
+    fn set_us_stocks_watch(&mut self) {
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "us_stocks");
+        let page_active = self.mode == Mode::Expanded(PageKind::Stocks) && self.st.ui.stocks_market == crate::state::StocksMarket::Us;
+        let open = (page_active || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none() && self.st.stocks_on();
+        if !open && !self.us_stocks_open {
+            return;
+        }
+        self.us_stocks_open = open;
+        let chart = if open && self.st.us_stocks.range != poni_core::stocks::Range::Day {
+            Some(self.st.us_stocks.pick.clone())
+        } else {
+            None
+        };
+        if let Some(s) = self.services.as_ref() {
+            s.us_stocks_watch(services::us_stocks::Watch { open, chart });
         }
     }
 
@@ -2958,6 +2982,16 @@ if self.grab.is_some() {
             }
             AppEvent::ForexHistory(hist) => {
                 self.st.forex.years.insert(hist.symbol.clone(), hist);
+                self.request_frame();
+            }
+            AppEvent::UsStocks(board) => {
+                self.st.us_stocks.board = Some(board);
+                self.st.us_stocks.last_fetched = self.st.now;
+                self.check_price_alerts();
+                self.request_frame();
+            }
+            AppEvent::UsStocksHistory { symbol, points } => {
+                self.st.us_stocks.years.insert(symbol, points);
                 self.request_frame();
             }
             AppEvent::Notify(ev) => self.on_notify(ev),
@@ -4087,6 +4121,7 @@ if self.grab.is_some() {
         self.set_crypto_watch();
         self.set_weather_watch();
         self.set_forex_watch();
+        self.set_us_stocks_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge.
         self.island.set_floating(pill::on(self.st.settings.theme).then_some(pill::TOP_GAP));

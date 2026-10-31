@@ -336,8 +336,8 @@ pub struct PageUiState {
     pub today_drawn: f64,
     /// Shows weather view instead of stats in Today page tiles.
     pub today_weather: bool,
-    /// Shows Forex & Gold instead of stocks list in Stocks page.
-    pub stocks_forex_mode: bool,
+    /// Market selected in Stocks page (IDX vs US Stocks).
+    pub stocks_market: StocksMarket,
     /// Shows Volume Mixer instead of player in Media page.
     pub media_mixer_mode: bool,
     /// Picked Forex symbol (e.g. "USD/IDR", "EMAS").
@@ -376,6 +376,8 @@ pub struct PageUiState {
     pub stocks: crate::pages::stocks::StocksUi,
     /// The Crypto page: its scroll, search, edit mode and chart animation.
     pub crypto: crate::pages::crypto::CryptoUi,
+    /// The Forex page: its scroll and chart animation.
+    pub forex: crate::pages::forex::ForexUi,
     /// The Downloads page: its link field, mode and scroll.
     pub downloads: crate::pages::downloads::DownloadsUi,
     /// The AI tab's own state while it shows (`pages::usage`).
@@ -626,6 +628,35 @@ pub struct ForexState {
     pub board: Option<poni_core::forex::ForexBoard>,
     pub last_fetched: f64,
     pub years: HashMap<String, poni_core::forex::ForexHistory>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StocksMarket {
+    #[default]
+    Idx,
+    Us,
+}
+
+/// Real-time US Stocks state.
+#[derive(Clone, Debug)]
+pub struct UsStocksState {
+    pub board: Option<poni_core::us_stocks::UsStockBoard>,
+    pub last_fetched: f64,
+    pub years: HashMap<String, Vec<(i32, f64)>>,
+    pub pick: String,
+    pub range: poni_core::stocks::Range,
+}
+
+impl Default for UsStocksState {
+    fn default() -> Self {
+        Self {
+            board: Some(poni_core::us_stocks::UsStockBoard::default_board()),
+            last_fetched: 0.0,
+            years: HashMap::new(),
+            pick: "AAPL".to_string(),
+            range: poni_core::stocks::Range::Day,
+        }
+    }
 }
 
 /// The Prayer times add-on's live state.
@@ -891,6 +922,8 @@ pub struct AppState {
     pub weather: WeatherState,
     /// Real-time Forex & Gold.
     pub forex: ForexState,
+    /// Real-time US Stocks quotes & charts.
+    pub us_stocks: UsStocksState,
     /// Per-application audio sessions for volume mixer.
     pub app_sessions: Vec<crate::services::audio::AppVolumeSession>,
     pub app_sessions_time: f64,
@@ -991,6 +1024,7 @@ impl AppState {
                 refresh_seq: 0,
             },
             forex: ForexState::default(),
+            us_stocks: UsStocksState::default(),
             app_sessions: Vec::new(),
             app_sessions_time: 0.0,
             downloads: poni_core::downloads::Jobs::default(),
@@ -1019,6 +1053,8 @@ impl AppState {
             PageKind::Health => !st.health_on(),
             PageKind::Stocks => !st.stocks_on(),
             PageKind::Crypto => !st.crypto_on(),
+            PageKind::Forex => !st.forex_on(),
+            PageKind::Weather => !st.weather_on(),
             PageKind::Downloads => !st.downloader_on(),
             PageKind::Record => !st.record_on(),
             PageKind::Notifications => !st.notifications_on(),
@@ -1094,6 +1130,11 @@ impl AppState {
     /// The Crypto add-on is on: the Crypto tab shows.
     pub fn crypto_on(&self) -> bool {
         self.addon(poni_core::addons::CRYPTO.id) == AddonStatus::Ready
+    }
+
+    /// The Forex add-on is on: the Forex & Commodities tab shows.
+    pub fn forex_on(&self) -> bool {
+        self.addon(poni_core::addons::FOREX.id) == AddonStatus::Ready
     }
 
     /// The Weather add-on is on: the Weather tab shows.

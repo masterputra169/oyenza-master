@@ -185,6 +185,9 @@ pub enum AppEvent {
     /// Real-time Forex and Gold prices (`services::forex`).
     Forex(poni_core::forex::ForexBoard),
     ForexHistory(poni_core::forex::ForexHistory),
+    /// Real-time US Stocks quotes and history (`services::us_stocks`).
+    UsStocks(poni_core::us_stocks::UsStockBoard),
+    UsStocksHistory { symbol: String, points: Vec<(i32, f64)> },
     /// One of yt-dlp's lines for download `id` (`services::downloader`).
     Download { id: u64, line: poni_core::ytdlp::Line },
     /// yt-dlp for download `id` ended (`ok`: it exited with 0).

@@ -39,6 +39,7 @@ pub mod stocks;
 pub mod crypto;
 pub mod weather;
 pub mod forex;
+pub mod us_stocks;
 pub mod sysmon;
 pub mod sysstats;
 pub mod update;
@@ -69,6 +70,8 @@ pub struct Services {
     weather: std::cell::OnceCell<Option<weather::WeatherService>>,
     /// Started when forex is watched or pinned ([`Services::forex_watch`]).
     forex: std::cell::OnceCell<Option<forex::ForexService>>,
+    /// Started when us_stocks is watched or pinned ([`Services::us_stocks_watch`]).
+    us_stocks: std::cell::OnceCell<Option<us_stocks::UsStocksService>>,
     /// Started at the first download ([`Services::download`]).
     downloader: std::cell::OnceCell<Option<downloader::DownloaderService>>,
     /// Started the first time the AI tab opens or its notices are on
@@ -113,7 +116,7 @@ impl Services {
             .map(|a| a.id)
             .collect();
         let addons = started("add-ons", addons::AddonService::start(sink.clone(), on));
-        Self { media, lyrics, _audio: audio, _bluetooth: bluetooth, fullscreen, oyenza, pairdrop, addons, stocks: std::cell::OnceCell::new(), crypto: std::cell::OnceCell::new(), weather: std::cell::OnceCell::new(), forex: std::cell::OnceCell::new(), usage: std::cell::OnceCell::new(), downloader: std::cell::OnceCell::new(), sink: sink.clone() }
+        Self { media, lyrics, _audio: audio, _bluetooth: bluetooth, fullscreen, oyenza, pairdrop, addons, stocks: std::cell::OnceCell::new(), crypto: std::cell::OnceCell::new(), weather: std::cell::OnceCell::new(), forex: std::cell::OnceCell::new(), us_stocks: std::cell::OnceCell::new(), usage: std::cell::OnceCell::new(), downloader: std::cell::OnceCell::new(), sink: sink.clone() }
     }
 
     pub fn stop(self, _helper: HWND) {
@@ -166,6 +169,16 @@ impl Services {
             return;
         }
         if let Some(s) = self.forex.get_or_init(|| started("forex", forex::ForexService::start(self.sink.clone()))) {
+            s.watch(w);
+        }
+    }
+
+    /// What US stocks wants. Its thread starts when open/pinned and sleeps when closed.
+    pub fn us_stocks_watch(&self, w: us_stocks::Watch) {
+        if !w.open && self.us_stocks.get().is_none() {
+            return;
+        }
+        if let Some(s) = self.us_stocks.get_or_init(|| started("us_stocks", us_stocks::UsStocksService::start(self.sink.clone()))) {
             s.watch(w);
         }
     }

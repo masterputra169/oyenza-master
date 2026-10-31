@@ -333,10 +333,10 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         draw_session(ui, st, area, &mut a, &fr);
     } else {
         let r = Rect::new(area.x, area.y, area.w, H_EMPTY);
-        let empty_r = Rect::new(r.x, r.y - 6.0, r.w, 108.0);
+        let empty_r = Rect::new(r.x, r.y - 10.0, r.w, 98.0);
         super::empty_state(ui, empty_r, Icon::Music, "Nothing playing", "Play music in Spotify, a browser or any media app");
         let mixer_w = 122.0;
-        let mixer_r = Rect::new(r.center().x - mixer_w / 2.0, r.y + 108.0, mixer_w, 26.0);
+        let mixer_r = Rect::new(r.center().x - mixer_w / 2.0, r.y + 104.0, mixer_w, 24.0);
         if ui.pill(wid("media.open_mixer_empty"), mixer_r, "Volume Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
             st.ui.media_mixer_mode = true;
         }

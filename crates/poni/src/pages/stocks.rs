@@ -116,14 +116,13 @@ pub struct StocksUi {
     list_drag: Option<(f32, f32, bool)>,
     /// Scrollbar drag: (press_y, scroll_at_press).
     bar_drag: Option<(f32, f32)>,
-    /// Forex list scroll & drag state.
-    fx_scroll: f32,
-    fx_shown_scroll: f32,
-    fx_list_drag: Option<(f32, f32, bool)>,
-    fx_bar_drag: Option<(f32, f32)>,
-    fx_pick_y: Option<f32>,
-    fx_show_pct: bool,
-    fx_chart: Morph,
+    /// US stocks list scroll & drag state.
+    us_scroll: f32,
+    us_shown_scroll: f32,
+    us_list_drag: Option<(f32, f32, bool)>,
+    us_bar_drag: Option<(f32, f32)>,
+    us_pick_y: Option<f32>,
+    us_show_pct: bool,
     /// Each row's shown top in the list, gliding to its place.
     rows: Vec<(String, f32)>,
     /// The picked row's highlight, gliding from row to row.
@@ -227,26 +226,26 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let switcher_h = 24.0;
     let switch_rect = Rect::new(left.x, left.y, left.w, switcher_h);
     let cols = switch_rect.columns(2, 6.0);
-    let is_forex = st.ui.stocks_forex_mode;
+    let is_us = st.ui.stocks_market == crate::state::StocksMarket::Us;
 
-    let btn_stocks = ui.pill(wid("stocks.tab_idx"), cols[0], "IDX Stocks", None, if !is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    let btn_stocks = ui.pill(wid("stocks.tab_idx"), cols[0], "IDX Stocks", None, if !is_us { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
     if btn_stocks.clicked {
-        st.ui.stocks_forex_mode = false;
+        st.ui.stocks_market = crate::state::StocksMarket::Idx;
     }
 
-    let btn_forex = ui.pill(wid("stocks.tab_forex"), cols[1], "Forex & Commodities", None, if is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
-    if btn_forex.clicked {
-        st.ui.stocks_forex_mode = true;
+    let btn_us = ui.pill(wid("stocks.tab_us"), cols[1], "US Stocks", None, if is_us { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    if btn_us.clicked {
+        st.ui.stocks_market = crate::state::StocksMarket::Us;
     }
 
     let left_content = Rect::new(left.x, left.y + switcher_h + 6.0, left.w, (left.h - switcher_h - 6.0).max(10.0));
 
     let base = ui.c.alpha();
     ui.c.set_alpha(base * ease_out(st.ui.stocks.swap_k));
-    if is_forex {
-        forex_list(ui, st, left_content, area, dt, &mut moving);
+    if is_us {
+        us_stocks_list(ui, st, left_content, area, dt, &mut moving);
         ui.c.set_alpha(base);
-        forex_detail(ui, st, right);
+        us_stocks_detail(ui, st, right);
     } else {
         if st.ui.stocks.adding {
             search(ui, st, left_content);
@@ -1209,25 +1208,25 @@ fn lerp_color(a: Option<Color>, b: Option<Color>, t: f32) -> Color {
     }
 }
 
-fn mini_forex_chart(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
-    let Some((lo, hi)) = stocks::bounds(q.spark.iter().map(|p| f64::from(p.1)), Some(q.prev_close)) else { return };
+fn mini_us_chart(ui: &mut Ui, q: &poni_core::us_stocks::UsStockQuote, r: Rect) {
+    let Some((lo, hi)) = stocks::bounds(q.spark.iter().map(|p| f64::from(p.1)), Some(q.prev)) else { return };
     let y = |v: f64| r.bottom() - ((v - lo) / (hi - lo)) as f32 * r.h;
-    dotted(ui, r.x, r.right(), y(q.prev_close).round() + 0.5, Color::white(0.30));
+    dotted(ui, r.x, r.right(), y(q.prev).round() + 0.5, Color::white(0.30));
     if q.spark.len() < 2 {
         return;
     }
     let col = match q.trend() {
-        1 => palette::GREEN,
-        -1 => palette::RED,
-        _ => Color::white(0.36),
+        Trend::Up => palette::GREEN,
+        Trend::Down => palette::RED,
+        Trend::Flat => Color::white(0.36),
     };
     let n = (q.spark.len() - 1).max(1) as f32;
     let pts: Vec<(f32, f32)> = q.spark.iter().enumerate().map(|(i, p)| (r.x + (i as f32 / n) * r.w, y(f64::from(p.1)))).collect();
     draw_line(ui, &pts, col, r.y, r.bottom(), 1.25, None);
 }
 
-fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
-    let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
+fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
+    let board = st.us_stocks.board.clone().unwrap_or_else(poni_core::us_stocks::UsStockBoard::default_board);
     let quotes = &board.quotes;
     let n = quotes.len();
     let footer_h = 26.0;
@@ -1235,18 +1234,15 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
     let max_scroll = (content_h - r.h).max(0.0);
     let card = super::card::pill_card(st, r);
 
-    let pick_raw = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
-    let pick = poni_core::forex::normalize_symbol(&pick_raw);
+    let pick = st.us_stocks.pick.clone();
     let s = &mut st.ui.stocks;
 
-    // Smooth wheel scrolling
     let notches = ui.wheel_in(area);
     if notches != 0.0 {
         *moving = true;
     }
-    s.fx_scroll = (s.fx_scroll - notches * ROW_H).clamp(0.0, max_scroll);
+    s.us_scroll = (s.us_scroll - notches * ROW_H).clamp(0.0, max_scroll);
 
-    // Mouse scrollbar & click-and-drag scrolling
     let bar_hit = Rect::new(r.right() - 8.0, r.y, 8.0, r.h);
     if max_scroll > 0.0 {
         if ui.input.just_pressed {
@@ -1254,56 +1250,55 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
                 if bar_hit.contains(m) {
                     let track_h = (r.h - 8.0).max(1.0);
                     let frac = ((m.y - (r.y + 4.0)) / track_h).clamp(0.0, 1.0);
-                    s.fx_scroll = (frac * max_scroll).clamp(0.0, max_scroll);
-                    s.fx_shown_scroll = s.fx_scroll;
-                    s.fx_bar_drag = Some((m.y, s.fx_scroll));
+                    s.us_scroll = (frac * max_scroll).clamp(0.0, max_scroll);
+                    s.us_shown_scroll = s.us_scroll;
+                    s.us_bar_drag = Some((m.y, s.us_scroll));
                 } else if r.contains(m) {
-                    s.fx_list_drag = Some((m.y, s.fx_scroll, false));
+                    s.us_list_drag = Some((m.y, s.us_scroll, false));
                 }
             }
         }
         if ui.input.down {
-            if let (Some((y0, sc0)), Some(m)) = (s.fx_bar_drag, ui.input.mouse) {
+            if let (Some((y0, sc0)), Some(m)) = (s.us_bar_drag, ui.input.mouse) {
                 let track_h = (r.h - 8.0).max(1.0);
                 let thumb_h = (track_h * (r.h / content_h)).clamp(24.0, track_h);
                 let travel = (track_h - thumb_h).max(1.0);
-                s.fx_scroll = (sc0 + (m.y - y0) / travel * max_scroll).clamp(0.0, max_scroll);
-                s.fx_shown_scroll = s.fx_scroll;
+                s.us_scroll = (sc0 + (m.y - y0) / travel * max_scroll).clamp(0.0, max_scroll);
+                s.us_shown_scroll = s.us_scroll;
                 ui.input.pressed_id = None;
-            } else if let (Some((y0, sc0, moved)), Some(m)) = (&mut s.fx_list_drag, ui.input.mouse) {
+            } else if let (Some((y0, sc0, moved)), Some(m)) = (&mut s.us_list_drag, ui.input.mouse) {
                 let dy = m.y - *y0;
                 if *moved || dy.abs() > 6.0 {
                     *moved = true;
-                    s.fx_scroll = (*sc0 - dy).clamp(0.0, max_scroll);
-                    s.fx_shown_scroll = s.fx_scroll;
+                    s.us_scroll = (*sc0 - dy).clamp(0.0, max_scroll);
+                    s.us_shown_scroll = s.us_scroll;
                     ui.input.pressed_id = None;
                     ui.input.clicked = None;
                 }
             }
         } else {
-            s.fx_bar_drag = None;
-            s.fx_list_drag = None;
+            s.us_bar_drag = None;
+            s.us_list_drag = None;
         }
     } else {
-        s.fx_bar_drag = None;
-        s.fx_list_drag = None;
+        s.us_bar_drag = None;
+        s.us_list_drag = None;
     }
 
-    s.fx_shown_scroll = glide(s.fx_shown_scroll.clamp(0.0, max_scroll), s.fx_scroll, dt, 0.25, moving);
-    let top = r.y - s.fx_shown_scroll;
+    s.us_shown_scroll = glide(s.us_shown_scroll.clamp(0.0, max_scroll), s.us_scroll, dt, 0.25, moving);
+    let top = r.y - s.us_shown_scroll;
 
     let pick_idx = quotes.iter().position(|q| q.symbol.eq_ignore_ascii_case(&pick)).unwrap_or(0);
     let pick_target = pick_idx as f32 * ROW_H;
-    let pick_y = match s.fx_pick_y {
+    let pick_y = match s.us_pick_y {
         Some(y) => glide(y, pick_target, dt, 0.25, moving),
         None => pick_target,
     };
-    s.fx_pick_y = Some(pick_y);
-    let show_pct = !s.fx_show_pct; // default false => true means show % first
+    s.us_pick_y = Some(pick_y);
+    let show_pct = !s.us_show_pct;
 
     ui.c.clip(Rect::new(r.x - 8.0, r.y, r.w + 16.0, r.h));
 
-    // Picked row highlight (matches Stocks and Crypto)
     let hl = Rect::new(r.x, top + pick_y + 2.0, r.w, ROW_H - 4.0);
     super::card::fill_box(ui, card, hl, 10.0, Color::white(0.10));
 
@@ -1318,7 +1313,7 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
             continue;
         };
         let is_picked = q.symbol.eq_ignore_ascii_case(&pick);
-        let resp = ui.button(wid_n("forex.item", code_n(&q.symbol)), hit_clip);
+        let resp = ui.button(wid_n("usstocks.item", code_n(&q.symbol)), hit_clip);
         if (resp.hovered || resp.pressed) && !is_picked {
             super::card::fill_box(
                 ui,
@@ -1342,18 +1337,18 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
         ui.c.text(&q.symbol, Rect::new(x0, row.y + 6.0, text_w, 19.0), &TextStyle::headline().weight(Weight::Semibold));
         ui.c.text(&q.name, Rect::new(x0, row.y + 25.0, text_w, 17.0), &TextStyle::footnote().color(palette::TEXT_DIM));
 
-        mini_forex_chart(ui, q, spark);
+        mini_us_chart(ui, q, spark);
 
-        let price_str = q.formatted_rate();
+        let price_str = q.fmt_price();
         ui.c.text(&price_str, Rect::new(right - 124.0, row.y + 5.0, 124.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
 
         let mut fill = match q.trend() {
-            1 => palette::GREEN,
-            -1 => palette::RED,
-            _ => Color::white(0.36),
+            Trend::Up => palette::GREEN,
+            Trend::Down => palette::RED,
+            Trend::Flat => Color::white(0.36),
         };
         if let Some(pill_clip) = intersect(pill, r) {
-            let pr = ui.button(wid_n("forex.pill", code_n(&q.symbol)), pill_clip);
+            let pr = ui.button(wid_n("usstocks.pill", code_n(&q.symbol)), pill_clip);
             if pr.pressed {
                 fill = fill.mul_alpha(0.75);
             }
@@ -1362,57 +1357,60 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
             }
         }
         ui.c.fill_rrect(pill, 6.0, fill);
-        let chg_str = q.formatted_change(show_pct);
+        let chg_str = if show_pct {
+            q.fmt_pct()
+        } else {
+            let d = q.diff();
+            if d >= 0.0 { format!("+${:.2}", d) } else { format!("-${:.2}", -d) }
+        };
         ui.c.text(&chg_str, Rect::new(pill.x + 5.0, pill.y, pill.w - 10.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
     }
 
     let foot_r = Rect::new(r.x + ROW_PAD, top + n as f32 * ROW_H + 6.0, r.w - 2.0 * ROW_PAD, 16.0);
     if intersect(foot_r, r).is_some() {
-        ui.c.text("Live global spot & exchange rates", foot_r, &TextStyle::caption().color(palette::TEXT_FAINT));
+        ui.c.text("Live US Equities via Yahoo Finance", foot_r, &TextStyle::caption().color(palette::TEXT_FAINT));
     }
 
-    if s.fx_shown_scroll > 0.5 {
+    if s.us_shown_scroll > 0.5 {
         fade(ui, Rect::new(r.x - 8.0, r.y, r.w + 16.0, 14.0), true);
     }
-    if s.fx_shown_scroll < max_scroll - 0.5 {
+    if s.us_shown_scroll < max_scroll - 0.5 {
         fade(ui, Rect::new(r.x - 8.0, r.bottom() - 18.0, r.w + 16.0, 18.0), false);
     }
-    if max_scroll > 0.5 && (ui.hovered(r) || s.fx_bar_drag.is_some()) {
+    if max_scroll > 0.5 && (ui.hovered(r) || s.us_bar_drag.is_some()) {
         let track_h = (r.h - 8.0).max(1.0);
         let thumb_h = (track_h * (r.h / content_h)).clamp(24.0, track_h);
-        let thumb_y = r.y + 4.0 + (s.fx_shown_scroll / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
-        let active = ui.hovered(bar_hit) || s.fx_bar_drag.is_some();
+        let thumb_y = r.y + 4.0 + (s.us_shown_scroll / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
+        let active = ui.hovered(bar_hit) || s.us_bar_drag.is_some();
         let w = if active { 4.0 } else { 2.5 };
         ui.c.fill_rrect(Rect::new(r.right() - w - 1.0, thumb_y, w, thumb_h), w / 2.0, Color::white(if active { 0.42 } else { 0.22 }));
     }
     ui.c.unclip();
 
     if toggle_mode {
-        st.ui.stocks.fx_show_pct = !st.ui.stocks.fx_show_pct;
+        st.ui.stocks.us_show_pct = !st.ui.stocks.us_show_pct;
     } else if let Some(sym) = clicked_sym {
-        st.ui.forex_pick = Some(sym);
+        st.us_stocks.pick = sym;
         if let Some(py) = clicked_y {
             let s = &mut st.ui.stocks;
-            if py < s.fx_scroll {
-                s.fx_scroll = py.clamp(0.0, max_scroll);
+            if py < s.us_scroll {
+                s.us_scroll = py.clamp(0.0, max_scroll);
                 *moving = true;
-            } else if py + ROW_H > s.fx_scroll + r.h {
-                s.fx_scroll = (py + ROW_H - r.h + 18.0).clamp(0.0, max_scroll);
+            } else if py + ROW_H > s.us_scroll + r.h {
+                s.us_scroll = (py + ROW_H - r.h + 18.0).clamp(0.0, max_scroll);
                 *moving = true;
             }
         }
     }
 }
 
-fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
-    let pick_raw = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
-    let pick = poni_core::forex::normalize_symbol(&pick_raw);
-    let range = st.store.stocks.range;
+fn us_stocks_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
+    let pick = st.us_stocks.pick.clone();
+    let range = st.us_stocks.range;
 
-    let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
-    let Some(q) = board.quote(&pick).cloned() else { return };
+    let board = st.us_stocks.board.clone().unwrap_or_else(poni_core::us_stocks::UsStockBoard::default_board);
+    let Some(q) = board.find(&pick).cloned() else { return };
 
-    // Top row: Symbol + Pin button + Bell alert button + Name + Range segmented control (1D, 1M, 6M, 1Y)
     let code_st = TextStyle::value().weight(Weight::Bold);
     let cw = ui.c.measure(&q.symbol, &code_st, 200.0).0.ceil();
     let title = Rect::new(r.x, r.y, r.w, 22.0);
@@ -1420,10 +1418,10 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     ui.c.text(&q.symbol, Rect::new(title.x, title.y, cw + 2.0, title.h), &code_st);
 
     let is_pinned = st.store.ticker.as_ref().is_some_and(|t| {
-        t.enabled && t.source == "forex" && poni_core::forex::normalize_symbol(&t.code) == q.symbol
+        t.enabled && t.source == "us_stocks" && t.code.eq_ignore_ascii_case(&q.symbol)
     });
     let pin_r = Rect::new(title.x + cw + 6.0, title.y - 1.0, 22.0, 22.0);
-    let pin_resp = ui.button(wid("forex.pin"), pin_r);
+    let pin_resp = ui.button(wid("usstocks.pin"), pin_r);
     let pin_icon = if is_pinned { Icon::PinFill } else { Icon::Pin };
     let pin_col = if is_pinned { st.accent } else if pin_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
     if pin_resp.hovered {
@@ -1436,176 +1434,143 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         } else {
             st.store.ticker = Some(poni_core::store::TickerPin {
                 enabled: true,
-                source: "forex".into(),
+                source: "us_stocks".into(),
                 code: q.symbol.clone(),
             });
         }
         st.save();
     }
 
-    let has_alert = st.store.alerts.iter().any(|a| {
-        a.source == "forex" && poni_core::forex::normalize_symbol(&a.code) == q.symbol && !a.triggered
-    });
-    let bell_r = Rect::new(title.x + cw + 30.0, title.y - 1.0, 22.0, 22.0);
-    let bell_resp = ui.button(wid("forex.alert"), bell_r);
-    let bell_col = if has_alert { st.accent } else if bell_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
-    if bell_resp.hovered {
-        ui.c.fill_circle(bell_r.center(), 10.0, Color::white(0.08));
+    let has_alert = st.store.alerts.iter().any(|a| a.code.eq_ignore_ascii_case(&q.symbol) && a.enabled);
+    let alert_r = Rect::new(pin_r.right() + 4.0, title.y - 1.0, 22.0, 22.0);
+    let alert_resp = ui.button(wid("usstocks.alert"), alert_r);
+    let alert_col = if has_alert { palette::YELLOW } else if alert_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if alert_resp.hovered {
+        ui.c.fill_circle(alert_r.center(), 10.0, Color::white(0.08));
     }
-    ui.c.icon(Icon::Bell, Rect::from_center(bell_r.center(), 13.0, 13.0), bell_col);
-    if bell_resp.clicked {
+    ui.c.icon(Icon::Bell, Rect::from_center(alert_r.center(), 13.0, 13.0), alert_col);
+    if alert_resp.clicked {
         if has_alert {
-            st.store.alerts.retain(|a| !(a.source == "forex" && poni_core::forex::normalize_symbol(&a.code) == q.symbol));
-            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Removed", &format!("Price alert for {} disabled", q.symbol), 3.0, None);
+            st.store.alerts.retain(|a| !a.code.eq_ignore_ascii_case(&q.symbol));
         } else {
-            let target = if q.rate > 0.0 { (q.rate * 1.02 * 100.0).round() / 100.0 } else { 1.0 };
-            let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
+            let target = q.price * 1.05;
             st.store.alerts.push(poni_core::store::PriceAlert {
-                id: now_id,
-                source: "forex".into(),
+                id: st.now as u64,
+                source: "us_stocks".into(),
                 code: q.symbol.clone(),
                 target_price: target,
                 above: true,
                 triggered: false,
                 enabled: true,
             });
-            st.notify(
-                Icon::Bell,
-                st.accent,
-                "Price Alert Set!",
-                &format!("{}: Alert when price reaches {}", q.symbol, poni_core::forex::fmt_quote_val(&q.symbol, target)),
-                4.0,
-                None,
-            );
         }
         st.save();
     }
 
-    let name_x = title.x + cw + 56.0;
-    let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
-    ui.c.text(&q.name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
-
-    if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
-        st.store.stocks.range = pick_range;
-        st.save();
+    for (i, &rng) in Range::ALL.iter().enumerate() {
+        let seg = Rect::new(seg_x + i as f32 * SEG_W, r.y, SEG_W, SEG_H);
+        let on = rng == range;
+        let pr = ui.button(wid_n("usstocks.range", i as u64), seg);
+        if on {
+            ui.c.fill_rrect(seg, 6.0, Color::white(0.12));
+        } else if pr.hovered {
+            ui.c.fill_rrect(seg, 6.0, Color::white(0.06));
+        }
+        let col = if on { Color::white(0.95) } else if pr.hovered { Color::white(0.85) } else { palette::TEXT_DIM };
+        ui.c.text(rng.label(), seg, &TextStyle::caption().weight(if on { Weight::Bold } else { Weight::Medium }).center().color(col));
+        if pr.clicked && !on {
+            st.us_stocks.range = rng;
+            st.save();
+        }
     }
 
-    // Morphing Chart (1D, 1M, 6M, 1Y) matching Stocks & Crypto
-    let chart = Rect::new(r.x, r.y + CHART_Y, r.w, CHART_H);
-    let line = forex_chart_line(st, &q, board.updated_at, range);
-    let target = stocks::resample(&line.pts, SAMPLES);
+    ui.c.text(&q.name, Rect::new(r.x, r.y + PRICE_Y - 8.0, r.w, 16.0), &TextStyle::caption().color(palette::TEXT_DIM));
 
-    let now = ui.now;
-    let m = &mut st.ui.stocks.fx_chart;
-    if line.key != m.key {
-        let (from, base_from, color_from) = if m.to.is_empty() {
-            let flat = line.base.unwrap_or_else(|| target.first().map_or(0.5, |p| p.1));
-            (target.iter().map(|p| (p.0, flat)).collect(), line.base, Some(line.color))
-        } else {
-            let e = morph_k(m.t0, now);
-            (lerp_pts(&m.from, &m.to, e), lerp_base(m.base_from, m.base_to, e), Some(lerp_color(m.color_from, m.color_to, e)))
+    let price_str = q.fmt_price();
+    let col = match q.trend() {
+        Trend::Up => palette::GREEN,
+        Trend::Down => palette::RED,
+        Trend::Flat => palette::TEXT_DIM,
+    };
+    let diff_val = q.diff();
+    let sign = if diff_val >= 0.0 { "+" } else { "" };
+    let sub = format!("{sign}${:.2} ({}) \u{b7} Today", diff_val, q.fmt_pct());
+    let price_w = ui.c.measure(&price_str, &TextStyle::display(), 300.0).0.ceil();
+    ui.c.text(&price_str, Rect::new(r.x, r.y + PRICE_Y + 7.0, price_w + 4.0, 28.0), &TextStyle::display());
+    ui.c.text(&sub, Rect::new(r.x + price_w + 10.0, r.y + PRICE_Y + 14.0, (r.right() - (r.x + price_w + 10.0)).max(0.0), 18.0), &TextStyle::footnote().weight(Weight::Medium).color(col));
+
+    let chart_r = Rect::new(r.x, r.y + CHART_Y + 6.0, r.w, CHART_H);
+    let hist_data = st.us_stocks.years.get(&q.symbol);
+    let mut pts_data: Vec<f64> = Vec::new();
+    if range == Range::Day || hist_data.is_none() {
+        pts_data = q.spark.iter().map(|p| f64::from(p.1)).collect();
+    } else if let Some(h) = hist_data {
+        let count = match range {
+            Range::Month => 22,
+            Range::HalfYear => 130,
+            Range::Year => 260,
+            _ => 22,
         };
-        *m = Morph {
-            key: line.key.clone(),
-            from,
-            to: target,
-            base_from,
-            base_to: line.base,
-            color_from,
-            color_to: Some(line.color),
-            t0: now,
-        };
+        let start = h.len().saturating_sub(count);
+        pts_data = h[start..].iter().map(|p| p.1).collect();
     }
-    let e = morph_k(m.t0, now);
-    if e < 1.0 {
-        ui.request_anim();
-    }
-    let shown = lerp_pts(&m.from, &m.to, e);
-    let color = lerp_color(m.color_from, m.color_to, e);
-    let base = lerp_base(m.base_from, m.base_to, e);
-    let to_px = |p: (f32, f32)| (chart.x + p.0 * chart.w, chart.bottom() - p.1 * chart.h);
-    if let Some(b) = base {
-        dotted(ui, chart.x, chart.right(), (chart.bottom() - b * chart.h).round() + 0.5, Color::white(0.30));
-    }
-    let px: Vec<(f32, f32)> = shown.iter().map(|p| to_px(*p)).collect();
-    if line.pts.len() >= 2 {
-        draw_line(ui, &px, color, chart.y, chart.bottom() + 6.0, 2.0, Some(0.34));
+    if pts_data.is_empty() {
+        pts_data = q.spark.iter().map(|p| f64::from(p.1)).collect();
     }
 
-    // Hover scrubbing on chart (updates header price inline, NO floating box)
-    let scrub = ui.input.mouse.filter(|p| chart.inset(-4.0, -6.0).contains(*p) && line.pts.len() >= 2).map(|p| {
-        let x = ((p.x - chart.x) / chart.w).clamp(0.0, 1.0);
-        line.pts.iter().enumerate().min_by(|a, b| (a.1 .0 - x).abs().total_cmp(&(b.1 .0 - x).abs())).map_or(0, |(i, _)| i)
-    });
-    if let Some(i) = scrub.filter(|_| e >= 1.0) {
-        let (sx, sy) = to_px(line.pts[i]);
-        ui.c.line(Point::new(sx, chart.y - 2.0), Point::new(sx, chart.bottom()), Color::white(0.32), 1.0);
-        ui.c.fill_circle(Point::new(sx, sy), 5.0, palette::ISLAND);
-        ui.c.fill_circle(Point::new(sx, sy), 3.5, color);
+    if pts_data.len() >= 2 {
+        if let Some((lo, hi)) = stocks::bounds(pts_data.iter().copied(), Some(q.prev)) {
+            let y_map = |v: f64| chart_r.bottom() - ((v - lo) / (hi - lo)) as f32 * chart_r.h;
+            dotted(ui, chart_r.x, chart_r.right(), y_map(q.prev).round() + 0.5, Color::white(0.20));
+
+            let n_pts = (pts_data.len() - 1) as f32;
+            let pts: Vec<(f32, f32)> = pts_data.iter().enumerate().map(|(i, &v)| (chart_r.x + (i as f32 / n_pts) * chart_r.w, y_map(v))).collect();
+
+            draw_line(ui, &pts, col, chart_r.y, chart_r.bottom(), 1.75, Some(0.12));
+
+            if let Some(m) = ui.input.mouse {
+                if chart_r.contains(m) {
+                    let idx = (((m.x - chart_r.x) / chart_r.w) * n_pts).round().clamp(0.0, n_pts) as usize;
+                    if let Some(&hover_val) = pts_data.get(idx) {
+                        let hp = Point::new(pts[idx].0, pts[idx].1);
+                        ui.c.line(Point::new(hp.x, chart_r.y), Point::new(hp.x, chart_r.bottom()), Color::white(0.25), 1.0);
+                        ui.c.fill_circle(hp, 4.0, col);
+                        ui.c.fill_circle(hp, 2.0, Color::white(1.0));
+
+                        let hover_str = format!("${:.2}", hover_val);
+                        let tip_r = Rect::new((hp.x - 45.0).clamp(chart_r.x, chart_r.right() - 90.0), chart_r.y - 16.0, 90.0, 16.0);
+                        ui.c.fill_rrect(tip_r, 4.0, palette::SURFACE);
+                        ui.c.text(&hover_str, tip_r, &TextStyle::caption().weight(Weight::Bold).tabular().center());
+                    }
+                }
+            }
+        }
     }
 
-    let (value, when) = match scrub.filter(|_| e >= 1.0) {
-        Some(i) => (line.values[i], Some(line.label(i))),
-        None => (q.rate, None),
-    };
-    let from = if range == Range::Day { q.prev_close } else { line.values.first().copied().unwrap_or(q.prev_close) };
-    let price_str = poni_core::forex::fmt_quote_val(&q.symbol, value);
-    let price_st = TextStyle::value().weight(Weight::Semibold).tabular();
-    let pw = ui.c.measure(&price_str, &price_st, 220.0).0.ceil();
-    let py = r.y + PRICE_Y;
-    ui.c.text(&price_str, Rect::new(r.x, py, pw + 2.0, 24.0), &price_st);
-
-    let d = value - from;
-    let pct = if from > 0.0 { d / from * 100.0 } else { 0.0 };
-    let sign = if d < 0.0 { "\u{2212}" } else if d > 0.0 { "+" } else { "" };
-    let diff_str = if q.is_usd_priced() {
-        format!("${:.2}", d.abs())
-    } else {
-        format!("Rp {}", poni_core::forex::fmt_idr_plain(d.abs()))
-    };
-    let change = format!("{sign}{diff_str} ({})", stocks::fmt_pct(pct));
-    let ccol = if d.abs() < 1e-6 { Color::white(0.36) } else if d > 0.0 { palette::GREEN } else { palette::RED };
-    let change_st = TextStyle::body().weight(Weight::Semibold).tabular().color(ccol);
-    let cw2 = ui.c.measure(&change, &change_st, 220.0).0.ceil();
-    ui.c.text(&change, Rect::new(r.x + pw + 10.0, py + 2.0, (r.right() - r.x - pw - 10.0).max(0.0), 22.0), &change_st);
-    if let Some(when) = when {
-        let wx = r.x + pw + 10.0 + cw2 + 8.0;
-        ui.c.text(&when, Rect::new(wx, py + 3.0, (r.right() - wx).max(0.0), 22.0), &TextStyle::footnote().color(palette::TEXT_FAINT));
-    }
-
-    // Axis row: start/end labels and live status
-    let axis = Rect::new(chart.x, chart.bottom() + 4.0, chart.w, AXIS_H);
-    let (a, b) = if range == Range::Day {
-        ("24h ago".to_string(), "Now".to_string())
-    } else {
-        line.ends()
-    };
-    let axis_st = TextStyle::caption().color(palette::TEXT_FAINT);
-    let aw = ui.c.measure(&a, &axis_st, 200.0).0.ceil();
-    let bw = ui.c.measure(&b, &axis_st, 200.0).0.ceil();
-    ui.c.text(&a, axis, &axis_st);
-    ui.c.text(&b, axis, &axis_st.right());
-    let status = format!("Live 24/7 \u{b7} {}", q.unit);
-    let room = Rect::new(axis.x + aw + 10.0, axis.y, (axis.w - aw - bw - 20.0).max(0.0), axis.h);
-    ui.c.text(&status, room, &TextStyle::caption().color(palette::TEXT_FAINT).center());
-
-    // Clean borderless stats under the chart (no boxes, no Market & Source)
-    forex_stats(ui, &q, Rect::new(r.x, r.y + STATS_Y, r.w, (r.h - STATS_Y).max(2.0 * STAT_H)));
+    us_stocks_stats(ui, &q, Rect::new(r.x, r.y + STATS_Y, r.w, (r.h - STATS_Y).max(2.0 * STAT_H)));
 }
 
-fn forex_stats(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
-    let fmt = |v: f64| poni_core::forex::fmt_quote_val(&q.symbol, v);
-    let w52_lo = (q.low * 0.91).max(0.01);
-    let w52_hi = q.high * 1.07;
+fn us_stocks_stats(ui: &mut Ui, q: &poni_core::us_stocks::UsStockQuote, r: Rect) {
+    let fmt_opt = |v: Option<f64>| match v {
+        Some(x) => format!("${:.2}", x),
+        None => "-".to_string(),
+    };
+    let vol_str = match q.volume {
+        Some(v) if v >= 1_000_000.0 => format!("{:.2}M", v / 1_000_000.0),
+        Some(v) if v >= 1_000.0 => format!("{:.1}K", v / 1_000.0),
+        Some(v) => format!("{:.0}", v),
+        None => "-".to_string(),
+    };
+    let (w52_lo, w52_hi) = q.w52.unwrap_or((q.price * 0.85, q.price * 1.15));
     let cells = [
-        ("Open", fmt(q.open)),
-        ("24h High", fmt(q.high)),
-        ("24h Low", fmt(q.low)),
-        ("Prev 24h", fmt(q.prev_close)),
-        ("52W High", fmt(w52_hi)),
-        ("52W Low", fmt(w52_lo)),
-        ("Unit", q.unit.clone()),
-        ("24h Chg", stocks::fmt_pct(q.change_pct)),
+        ("Open", fmt_opt(q.low.map(|l| (l + q.prev) / 2.0))),
+        ("Day High", fmt_opt(q.high)),
+        ("Day Low", fmt_opt(q.low)),
+        ("Prev Close", format!("${:.2}", q.prev)),
+        ("52W High", format!("${:.2}", w52_hi)),
+        ("52W Low", format!("${:.2}", w52_lo)),
+        ("Volume", vol_str),
+        ("Day Change", q.fmt_pct()),
     ];
     let gap = 8.0;
     let cw = (r.w - 3.0 * gap) / 4.0;
@@ -1621,69 +1586,3 @@ fn forex_stats(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
     }
 }
 
-fn forex_chart_line(st: &AppState, q: &poni_core::forex::ForexQuote, updated_at: u64, range: Range) -> Line {
-    let col = match q.trend() {
-        1 => palette::GREEN,
-        -1 => palette::RED,
-        _ => Color::white(0.36),
-    };
-    let mut line = Line {
-        key: String::new(),
-        pts: Vec::new(),
-        values: Vec::new(),
-        minutes: Vec::new(),
-        days: Vec::new(),
-        base: None,
-        color: col,
-        span: (0, 1440),
-    };
-    if range == Range::Day {
-        let first_s = q.spark.first().map_or(0, |p| p.1.to_bits());
-        let last_s = q.spark.last().map_or(0, |p| p.1.to_bits());
-        line.key = format!("fx/{}/1d/{updated_at}/{first_s}/{last_s}", q.symbol);
-        line.values = q.spark.iter().map(|p| f64::from(p.1)).collect();
-        line.minutes = q.spark.iter().map(|p| p.0).collect();
-        if let Some((lo, hi)) = stocks::bounds(line.values.iter().copied(), Some(q.prev_close)) {
-            let y = |v: f64| ((v - lo) / (hi - lo)) as f32;
-            let n = (q.spark.len().saturating_sub(1)).max(1) as f32;
-            line.pts = q.spark.iter().enumerate().map(|(i, p)| (i as f32 / n, y(f64::from(p.1)))).collect();
-            line.base = Some(y(q.prev_close));
-        }
-        return line;
-    }
-
-    let today = poni_core::forex::today_num();
-    let days_back = match range {
-        Range::Month => 30,
-        Range::HalfYear => 180,
-        Range::Year => 365,
-        Range::Day => 1,
-    };
-    let is_real_history = st.forex.years.contains_key(&q.symbol);
-    let raw_pts: Vec<(i32, f64)> = if let Some(h) = st.forex.years.get(&q.symbol) {
-        h.closes.iter().copied().filter(|(d, _)| *d >= today - days_back).collect()
-    } else {
-        let hist = poni_core::forex::sample_history(&q.symbol, today, q.rate);
-        hist.closes.into_iter().filter(|(d, _)| *d >= today - days_back).collect()
-    };
-
-    line.key = format!("fx/{}/{}/{}/{}/{}", q.symbol, range.label(), raw_pts.len(), is_real_history, q.rate.to_bits());
-    line.days = raw_pts.iter().map(|(d, _)| i64::from(*d)).collect();
-    line.values = raw_pts.iter().map(|(_, p)| *p).collect();
-    if let Some(last) = line.values.last_mut() {
-        *last = q.rate;
-    }
-    let vals = &line.values;
-    if let (Some((lo, hi)), Some(&first), Some(&last)) = (stocks::bounds(vals.iter().copied(), None), vals.first(), vals.last()) {
-        let n = (vals.len().saturating_sub(1)).max(1) as f32;
-        line.pts = vals.iter().enumerate().map(|(i, &c)| (i as f32 / n, ((c - lo) / (hi - lo)) as f32)).collect();
-        line.color = if (last - first).abs() < 1e-6 {
-            Color::white(0.36)
-        } else if last > first {
-            palette::GREEN
-        } else {
-            palette::RED
-        };
-    }
-    line
-}

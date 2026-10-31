@@ -15,6 +15,7 @@ pub mod crypto;
 pub mod downloads;
 pub mod downloads_offer;
 pub mod focus;
+pub mod forex;
 pub mod health;
 pub mod ielts;
 pub mod media;
@@ -93,6 +94,8 @@ pub enum PageKind {
     Stocks,
     /// Cryptocurrency prices, charts and 24h stats, while the Crypto add-on is on ([`tabs`]).
     Crypto,
+    /// Forex rates and commodities (Gold, Silver, Oil), while the Forex add-on is on ([`tabs`]).
+    Forex,
     /// Real-time weather and temperature (`pages::weather`).
     Weather,
     /// Links to save as video or sound, while the Downloader add-on is on ([`tabs`]).
@@ -110,7 +113,7 @@ pub enum PageKind {
 impl PageKind {
     /// The tab row's order: the island's own pages, Oyenza, then the
     /// add-ons' pages and the "+".
-    pub const ALL: [PageKind; 21] = [
+    pub const ALL: [PageKind; 22] = [
         PageKind::Media,
         PageKind::Today,
         PageKind::Shelf,
@@ -128,6 +131,7 @@ impl PageKind {
         PageKind::Weather,
         PageKind::Stocks,
         PageKind::Crypto,
+        PageKind::Forex,
         PageKind::Downloads,
         PageKind::Notifications,
         PageKind::Addons,
@@ -152,6 +156,7 @@ impl PageKind {
             PageKind::Prayer => "prayer",
             PageKind::Stocks => "stocks",
             PageKind::Crypto => "crypto",
+            PageKind::Forex => "forex",
             PageKind::Weather => "weather",
             PageKind::Downloads => "downloads",
             PageKind::Notifications => "notifications",
@@ -184,6 +189,7 @@ impl PageKind {
             PageKind::Prayer => "Prayer",
             PageKind::Stocks => "Stocks",
             PageKind::Crypto => "Crypto",
+            PageKind::Forex => "Forex & Commodities",
             PageKind::Weather => "Weather",
             PageKind::Downloads => "Downloads",
             PageKind::Notifications => "Notifications",
@@ -210,6 +216,7 @@ impl PageKind {
             PageKind::Prayer => Icon::Moon,
             PageKind::Stocks => Icon::Stocks,
             PageKind::Crypto => Icon::Crypto,
+            PageKind::Forex => Icon::Forex,
             PageKind::Weather => Icon::Sun,
             PageKind::Downloads => Icon::Download,
             PageKind::Notifications => Icon::Bell,
@@ -271,6 +278,7 @@ fn row(st: &AppState, open: Option<PageKind>) -> Vec<PageKind> {
             PageKind::Script => st.script_on(),
             PageKind::Stocks => st.stocks_on(),
             PageKind::Crypto => st.crypto_on(),
+            PageKind::Forex => st.forex_on() || open == Some(PageKind::Forex),
             PageKind::Weather => st.weather_on() || open == Some(PageKind::Weather),
             PageKind::Downloads => st.downloader_on(),
             PageKind::Record => st.record_on(),
@@ -307,6 +315,7 @@ pub fn content_height(p: PageKind, st: &AppState) -> f32 {
         PageKind::Prayer => prayer::height(st),
         PageKind::Stocks => stocks::height(st),
         PageKind::Crypto => crypto::height(st),
+        PageKind::Forex => forex::height(st),
         PageKind::Weather => weather::height(st),
         PageKind::Downloads => downloads::height(st),
         PageKind::Notifications => notifications::height(st),
@@ -450,6 +459,7 @@ pub(crate) fn draw_page(ui: &mut Ui, st: &mut AppState, area: Rect, page: PageKi
         PageKind::Prayer => prayer::draw(ui, st, area),
         PageKind::Stocks => stocks::draw(ui, st, area),
         PageKind::Crypto => crypto::draw(ui, st, area),
+        PageKind::Forex => forex::draw(ui, st, area),
         PageKind::Weather => weather::draw(ui, st, area),
         PageKind::Downloads => downloads::draw(ui, st, area),
         PageKind::Notifications => notifications::draw(ui, st, area),

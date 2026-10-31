@@ -16,7 +16,7 @@
 #ifndef ExeSource
   #define ExeSource "..\target\release\poni.exe"
 #endif
-#define AppName "Oyenza Studio"
+#define AppName "Oyenza Master"
 ; Folder, data and Run value names stay "Poni" (the app and 0.1.x installs use them).
 #define AppDir "Poni"
 #define AppPublisher "Jatevo Labs"
@@ -45,7 +45,7 @@ ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=Oyenza-Studio-Setup-{#AppVersion}
+OutputBaseFilename=Oyenza-Master-Setup-{#AppVersion}
 SetupIconFile=..\crates\poni\res\poni.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
