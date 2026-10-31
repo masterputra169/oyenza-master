@@ -22,6 +22,7 @@ const SPARK_W: f32 = 50.0;
 const PRICE_Y: f32 = 28.0;
 const CHART_Y: f32 = 62.0;
 const CHART_H: f32 = 106.0;
+const AXIS_H: f32 = 16.0;
 const STATS_Y: f32 = 192.0;
 const STAT_H: f32 = 32.0;
 const SEG_W: f32 = 32.0;
@@ -331,6 +332,7 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
     let Some(q) = board.quote(&pick).cloned() else { return };
 
+    // 1. Title bar: Code, Pin, Alert, Instrument Name, and Range Selector
     let code_st = TextStyle::value().weight(Weight::Bold);
     let cw = ui.c.measure(&q.symbol, &code_st, 200.0).0.ceil();
     let title = Rect::new(r.x, r.y, r.w, 22.0);
@@ -364,7 +366,7 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let has_alert = st.store.alerts.iter().any(|a| a.code.eq_ignore_ascii_case(&q.symbol) && a.enabled);
     let alert_r = Rect::new(pin_r.right() + 4.0, title.y - 1.0, 22.0, 22.0);
     let alert_resp = ui.button(wid("forex.alert"), alert_r);
-    let alert_col = if has_alert { palette::YELLOW } else if alert_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    let alert_col = if has_alert { st.accent } else if alert_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
     if alert_resp.hovered {
         ui.c.fill_circle(alert_r.center(), 10.0, Color::white(0.08));
     }
@@ -372,10 +374,12 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     if alert_resp.clicked {
         if has_alert {
             st.store.alerts.retain(|a| !a.code.eq_ignore_ascii_case(&q.symbol));
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Removed", &format!("Price alert for {} disabled", q.symbol), 3.0, None);
         } else {
             let target = q.rate * 1.02;
+            let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
             st.store.alerts.push(poni_core::store::PriceAlert {
-                id: st.now as u64,
+                id: now_id,
                 source: "forex".into(),
                 code: q.symbol.clone(),
                 target_price: target,
@@ -383,42 +387,24 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
                 triggered: false,
                 enabled: true,
             });
+            st.notify(Icon::Bell, st.accent, "Price Alert Set!", &format!("{}: Alert when price reaches {}", q.symbol, poni_core::forex::fmt_quote_val(&q.symbol, target)), 4.0, None);
         }
         st.save();
     }
 
-    for (i, &rng) in Range::ALL.iter().enumerate() {
-        let seg = Rect::new(seg_x + i as f32 * SEG_W, r.y, SEG_W, SEG_H);
-        let on = rng == range;
-        let pr = ui.button(wid_n("forex.range", i as u64), seg);
-        if on {
-            ui.c.fill_rrect(seg, 6.0, Color::white(0.12));
-        } else if pr.hovered {
-            ui.c.fill_rrect(seg, 6.0, Color::white(0.06));
-        }
-        let col = if on { Color::white(0.95) } else if pr.hovered { Color::white(0.85) } else { palette::TEXT_DIM };
-        ui.c.text(rng.label(), seg, &TextStyle::caption().weight(if on { Weight::Bold } else { Weight::Medium }).center().color(col));
-        if pr.clicked && !on {
-            st.store.stocks.range = rng;
-            st.save();
-        }
+    // Instrument Name directly on top row
+    let name_x = alert_r.right() + 8.0;
+    let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
+    ui.c.text(&q.name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
+
+    // Range selector using identical style
+    if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
+        st.store.stocks.range = pick_range;
+        st.save();
     }
 
-    ui.c.text(&q.name, Rect::new(r.x, r.y + PRICE_Y - 8.0, r.w, 16.0), &TextStyle::caption().color(palette::TEXT_DIM));
-
-    let price_str = q.formatted_rate();
-    let col = match q.trend() {
-        1 => palette::GREEN,
-        -1 => palette::RED,
-        _ => palette::TEXT_DIM,
-    };
-    let sub = format!("{} \u{b7} per {}", q.formatted_change(true), q.unit);
-    let price_w = ui.c.measure(&price_str, &TextStyle::display(), 300.0).0.ceil();
-    ui.c.text(&price_str, Rect::new(r.x, r.y + PRICE_Y + 7.0, price_w + 4.0, 28.0), &TextStyle::display());
-    ui.c.text(&sub, Rect::new(r.x + price_w + 10.0, r.y + PRICE_Y + 14.0, (r.right() - (r.x + price_w + 10.0)).max(0.0), 18.0), &TextStyle::footnote().weight(Weight::Medium).color(col));
-
-    // Interactive chart with historical or intraday data
-    let chart_r = Rect::new(r.x, r.y + CHART_Y + 6.0, r.w, CHART_H);
+    // 2. Chart points preparation
+    let chart_r = Rect::new(r.x, r.y + CHART_Y, r.w, CHART_H);
     let hist_data = st.forex.years.get(&q.symbol);
     let mut pts_data: Vec<f64> = Vec::new();
     if range == Range::Day || hist_data.is_none() {
@@ -437,37 +423,90 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         pts_data = q.spark.iter().map(|p| f64::from(p.1)).collect();
     }
 
+    // 3. Scrubbing detection
+    let scrub = ui.input.mouse.filter(|p| chart_r.inset(-4.0, -6.0).contains(*p) && pts_data.len() >= 2).map(|p| {
+        let x = ((p.x - chart_r.x) / chart_r.w).clamp(0.0, 1.0);
+        let n_pts = (pts_data.len() - 1) as f32;
+        (x * n_pts).round().clamp(0.0, n_pts) as usize
+    });
+
+    let (disp_rate, disp_pct, when_label) = match scrub {
+        Some(idx) if idx < pts_data.len() => {
+            let v = pts_data[idx];
+            let pct = if q.prev_close > 0.0 { (v - q.prev_close) / q.prev_close * 100.0 } else { 0.0 };
+            let label = match range {
+                Range::Day => format!("{:02}:{:02}", (idx * 30) / 60, (idx * 30) % 60),
+                Range::Month => format!("{}d ago", pts_data.len() - 1 - idx),
+                _ => format!("{}d ago", pts_data.len() - 1 - idx),
+            };
+            (v, pct, Some(label))
+        }
+        _ => (q.rate, q.change_pct, None),
+    };
+
+    // 4. Price & Change subtitle line (exact same layout & typography as Stocks)
+    let py = r.y + PRICE_Y;
+    let price_str = poni_core::forex::fmt_quote_val(&q.symbol, disp_rate);
+    let price_st = TextStyle::value().weight(Weight::Semibold).tabular();
+    let pw = ui.c.measure(&price_str, &price_st, 200.0).0.ceil();
+    ui.c.text(&price_str, Rect::new(r.x, py, pw + 2.0, 24.0), &price_st);
+
+    let sign = if disp_pct > 0.005 { "+" } else if disp_pct < -0.005 { "−" } else { "" };
+    let chg_str = format!("{sign}{:.2}% · per {}", disp_pct.abs(), q.unit);
+    let ccol = if disp_pct > 0.005 { palette::GREEN } else if disp_pct < -0.005 { palette::RED } else { Color::white(0.36) };
+    let chg_st = TextStyle::body().weight(Weight::Semibold).tabular().color(ccol);
+    let cw2 = ui.c.measure(&chg_str, &chg_st, 250.0).0.ceil();
+    ui.c.text(&chg_str, Rect::new(r.x + pw + 10.0, py + 2.0, (r.right() - r.x - pw - 10.0).max(0.0), 22.0), &chg_st);
+
+    if let Some(when) = when_label {
+        let wx = r.x + pw + 10.0 + cw2 + 8.0;
+        ui.c.text(&when, Rect::new(wx, py + 3.0, (r.right() - wx).max(0.0), 22.0), &TextStyle::footnote().color(palette::TEXT_FAINT));
+    }
+
+    // 5. Interactive Chart rendering
     if pts_data.len() >= 2 {
         if let Some((lo, hi)) = stocks::bounds(pts_data.iter().copied(), Some(q.prev_close)) {
             let y_map = |v: f64| chart_r.bottom() - ((v - lo) / (hi - lo)) as f32 * chart_r.h;
-            dotted(ui, chart_r.x, chart_r.right(), y_map(q.prev_close).round() + 0.5, Color::white(0.20));
+            dotted(ui, chart_r.x, chart_r.right(), y_map(q.prev_close).round() + 0.5, Color::white(0.28));
 
             let n_pts = (pts_data.len() - 1) as f32;
             let pts: Vec<(f32, f32)> = pts_data.iter().enumerate().map(|(i, &v)| (chart_r.x + (i as f32 / n_pts) * chart_r.w, y_map(v))).collect();
 
-            draw_line(ui, &pts, col, chart_r.y, chart_r.bottom(), 1.75, Some(0.12));
+            let col = match q.trend() {
+                1 => palette::GREEN,
+                -1 => palette::RED,
+                _ => Color::white(0.36),
+            };
+            draw_line(ui, &pts, col, chart_r.y, chart_r.bottom() + 4.0, 1.85, Some(0.30));
 
-            // Hover indicator
-            if let Some(m) = ui.input.mouse {
-                if chart_r.contains(m) {
-                    let idx = (((m.x - chart_r.x) / chart_r.w) * n_pts).round().clamp(0.0, n_pts) as usize;
-                    if let Some(&hover_val) = pts_data.get(idx) {
-                        let hp = Point::new(pts[idx].0, pts[idx].1);
-                        ui.c.line(Point::new(hp.x, chart_r.y), Point::new(hp.x, chart_r.bottom()), Color::white(0.25), 1.0);
-                        ui.c.fill_circle(hp, 4.0, col);
-                        ui.c.fill_circle(hp, 2.0, Color::white(1.0));
-
-                        let hover_str = poni_core::forex::fmt_quote_val(&q.symbol, hover_val);
-                        let tip_r = Rect::new((hp.x - 45.0).clamp(chart_r.x, chart_r.right() - 90.0), chart_r.y - 16.0, 90.0, 16.0);
-                        ui.c.fill_rrect(tip_r, 4.0, palette::SURFACE);
-                        ui.c.text(&hover_str, tip_r, &TextStyle::caption().weight(Weight::Bold).tabular().center());
-                    }
+            // Native hairline cursor on hover/scrubbing
+            if let Some(idx) = scrub {
+                if let Some(&p) = pts.get(idx) {
+                    ui.c.line(Point::new(p.0, chart_r.y - 2.0), Point::new(p.0, chart_r.bottom()), Color::white(0.32), 1.0);
+                    ui.c.fill_circle(Point::new(p.0, p.1), 5.0, palette::ISLAND);
+                    ui.c.fill_circle(Point::new(p.0, p.1), 3.5, col);
                 }
             }
         }
     }
 
-    // Clean borderless stats under the chart
+    // 6. Chart Axis
+    let axis_st = TextStyle::caption().color(palette::TEXT_FAINT);
+    let left_lbl = match range {
+        Range::Day => "24h Ago",
+        Range::Month => "1 Mo Ago",
+        Range::HalfYear => "6 Mo Ago",
+        Range::Year => "1 Yr Ago",
+    };
+    let right_lbl = match range {
+        Range::Day => "Now",
+        _ => "Today",
+    };
+    ui.c.text(left_lbl, Rect::new(chart_r.x, chart_r.bottom() + 4.0, 70.0, AXIS_H), &axis_st);
+    ui.c.text("Global Spot & FX Rates", Rect::new(chart_r.x, chart_r.bottom() + 4.0, chart_r.w, AXIS_H), &axis_st.center());
+    ui.c.text(right_lbl, Rect::new(chart_r.right() - 70.0, chart_r.bottom() + 4.0, 70.0, AXIS_H), &axis_st.right());
+
+    // 7. Day stats
     forex_stats(ui, &q, Rect::new(r.x, r.y + STATS_Y, r.w, (r.h - STATS_Y).max(2.0 * STAT_H)));
 }
 
@@ -497,4 +536,24 @@ fn forex_stats(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
         ui.c.text(label, Rect::new(cell.x, cell.y + 3.0, cell.w, 13.0), &label_st);
         ui.c.text(value, Rect::new(cell.x, cell.y + 15.0, cell.w, 15.0), &value_st);
     }
+}
+
+fn range_control(ui: &mut Ui, r: Rect, now: Range) -> Option<Range> {
+    let mut out = None;
+    for (i, range) in Range::ALL.into_iter().enumerate() {
+        let seg = Rect::new(r.x + i as f32 * SEG_W, r.y, SEG_W, r.h);
+        let resp = ui.button(wid_n("forex.range", i as u64), seg);
+        let on = range == now;
+        if on {
+            ui.c.fill_rrect(seg.inset(1.0, 0.0), r.h / 2.0, Color::white(0.16));
+        } else if resp.hovered {
+            ui.c.fill_rrect(seg.inset(1.0, 0.0), r.h / 2.0, Color::white(0.07));
+        }
+        let c = if on || resp.hovered { palette::TEXT } else { palette::TEXT_DIM };
+        ui.c.text(range.label(), seg, &TextStyle::footnote().weight(Weight::Semibold).center().color(c));
+        if resp.clicked && !on {
+            out = Some(range);
+        }
+    }
+    out
 }
