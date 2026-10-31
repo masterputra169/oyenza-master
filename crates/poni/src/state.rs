@@ -943,6 +943,7 @@ impl AppState {
         } else {
             &settings.start_page
         });
+        let cached_weather = store.weather.clone();
         let mut st = Self {
             settings,
             store,
@@ -982,7 +983,10 @@ impl AppState {
             recorder: false,
             stocks: StocksState::default(),
             crypto: CryptoState::default(),
-            weather: WeatherState::default(),
+            weather: WeatherState {
+                report: cached_weather,
+                last_fetched: 0.0,
+            },
             forex: ForexState::default(),
             app_sessions: Vec::new(),
             app_sessions_time: 0.0,
@@ -1087,6 +1091,11 @@ impl AppState {
     /// The Crypto add-on is on: the Crypto tab shows.
     pub fn crypto_on(&self) -> bool {
         self.addon(poni_core::addons::CRYPTO.id) == AddonStatus::Ready
+    }
+
+    /// The Weather add-on is on: the Weather tab shows.
+    pub fn weather_on(&self) -> bool {
+        self.addon(poni_core::addons::WEATHER.id) == AddonStatus::Ready
     }
 
     /// The Downloader add-on is on, with its tools in place, for an account

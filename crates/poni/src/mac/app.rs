@@ -1811,6 +1811,7 @@ impl App {
                 self.check_price_alerts();
             }
             AppEvent::Weather(report) => {
+                self.st.store.weather = Some(report.clone());
                 self.st.weather.report = Some(report);
                 self.st.weather.last_fetched = self.st.now;
                 self.request_frame();
@@ -2980,12 +2981,18 @@ impl App {
     fn set_weather_watch(&mut self) {
         let away = self.away.0 || self.away.1;
         let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
-        let open = (self.mode == Mode::Expanded(PageKind::Today) || ticker_active) && !away && !self.st.power.saver;
+        let open = (self.mode == Mode::Expanded(PageKind::Weather) || self.mode == Mode::Expanded(PageKind::Today) || ticker_active) && !away && !self.st.power.saver;
         if !open && !self.weather_open {
             return;
         }
         self.weather_open = open;
-        let (lat, lng, city) = if let Some(ref p) = self.st.prayer.place {
+        let (lat, lng, city) = if let Some(ref city_name) = self.st.store.weather_city {
+            if let Some((_, lat, lng)) = pages::weather::PRESET_CITIES.iter().find(|(c, _, _)| c.eq_ignore_ascii_case(city_name)) {
+                (*lat, *lng, city_name.clone())
+            } else {
+                (-6.2088, 106.8456, "Jakarta".into())
+            }
+        } else if let Some(ref p) = self.st.prayer.place {
             (p.lat, p.lng, p.label.clone())
         } else if let Some((lat, lng, _)) = self.st.prayer.last_fix {
             (lat, lng, "Local".into())

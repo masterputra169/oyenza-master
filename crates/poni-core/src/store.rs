@@ -57,6 +57,11 @@ pub struct Store {
     /// Price alerts for crypto, stocks, or forex.
     #[serde(default)]
     pub alerts: Vec<PriceAlert>,
+    /// Cached weather report and city setting.
+    #[serde(default)]
+    pub weather: Option<crate::weather::WeatherReport>,
+    #[serde(default)]
+    pub weather_city: Option<String>,
     /// Oyenza Studio Recorder has written to the island (`recorder::Message`)
     /// at least once, so it reads the Record page's links: Screen recorder
     /// shows from then on. 1.0.0 never writes, and its Record would do nothing.
@@ -78,6 +83,8 @@ impl Default for Store {
             crypto: crate::crypto::CryptoWatchlist::default(),
             ticker: None,
             alerts: Vec::new(),
+            weather: None,
+            weather_city: None,
             recorder_island: false,
         }
     }

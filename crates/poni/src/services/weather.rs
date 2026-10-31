@@ -86,7 +86,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let mut last_coords = (0.0, 0.0);
 
     loop {
-        let watch = {
+        let (watch, was_woken) = {
             let mut st = lock.lock().unwrap();
             while !st.stop && (!st.watch.open || (!st.wake && last_ask.elapsed() < REFRESH_GAP)) {
                 let wait = if !st.watch.open {
@@ -99,8 +99,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             if st.stop {
                 break;
             }
+            let woken = st.wake;
             st.wake = false;
-            st.watch.clone()
+            (st.watch.clone(), woken)
         };
 
         if !watch.open {
@@ -108,11 +109,10 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
         }
 
         let coords_changed = (watch.lat - last_coords.0).abs() > 0.05 || (watch.lng - last_coords.1).abs() > 0.05;
-        if !coords_changed && last_ask.elapsed() < REFRESH_GAP {
+        if !was_woken && !coords_changed && last_ask.elapsed() < REFRESH_GAP {
             continue;
         }
 
-        last_ask = Instant::now();
         last_coords = (watch.lat, watch.lng);
 
         let url = format!(
@@ -122,14 +122,22 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
+        let mut success = false;
         if let Some(ref client) = http {
             if let Ok(resp) = client.get(&url, TIMEOUT) {
                 if resp.status == 200 {
                     if let Ok(report) = WeatherReport::from_json(&watch.city, &resp.body, now_unix) {
                         sink.send(AppEvent::Weather(report));
+                        success = true;
                     }
                 }
             }
+        }
+        if success {
+            last_ask = Instant::now();
+        } else {
+            // On failure, retry in 15 seconds instead of waiting full 15 minutes
+            last_ask = Instant::now() - REFRESH_GAP + Duration::from_secs(15);
         }
     }
 }

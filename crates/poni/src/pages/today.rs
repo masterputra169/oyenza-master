@@ -174,7 +174,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     if !compact {
         let (_, weather_toggle) = draw_weeks_grid(ui, st, left, None, None);
         if weather_toggle {
-            st.ui.today_weather = !st.ui.today_weather;
+            st.page = crate::pages::PageKind::Weather;
         }
     }
     // The bottom-right tile (or the card) shares the Pill card's corner.
@@ -267,23 +267,23 @@ fn draw_weeks_grid(ui: &mut Ui, st: &AppState, r: Rect, days: Option<(&Weeks, So
     ui.c.text(&date, Rect::new(r.x, r.y + 16.0, dw + 4.0, 24.0), &date_st);
 
     let mut weather_toggle = false;
-    if let Some(ref w) = st.weather.report {
-        let w_label = format!("{} {:.0}°", w.icon_emoji(), w.temp);
-        let wx = r.x + dw + 10.0;
-        let wr = Rect::new(wx, r.y + 18.0, (r.right() - wx).max(46.0), 20.0);
-        let resp = ui.button(wid("today.weather_toggle"), wr);
-        if resp.clicked {
-            weather_toggle = true;
-        }
-        let w_col = if st.ui.today_weather {
-            st.accent
-        } else if resp.hovered {
-            Color::white(0.95)
-        } else {
-            palette::TEXT_DIM
-        };
-        ui.c.text(&w_label, wr, &TextStyle::footnote().weight(Weight::Semibold).color(w_col));
+    let w_label = if let Some(ref w) = st.weather.report {
+        format!("{} {:.0}°", w.icon_emoji(), w.temp)
+    } else {
+        "🌤️ Cuaca".to_string()
+    };
+    let wx = r.x + dw + 10.0;
+    let wr = Rect::new(wx, r.y + 18.0, (r.right() - wx).max(58.0), 20.0);
+    let resp = ui.button(wid("today.weather_toggle"), wr);
+    if resp.clicked {
+        weather_toggle = true;
     }
+    let w_col = if resp.hovered {
+        Color::white(0.95)
+    } else {
+        st.accent
+    };
+    ui.c.text(&w_label, wr, &TextStyle::footnote().weight(Weight::Semibold).color(w_col));
     if let Some((_, apps)) = days {
         // The apps it reads, at the top right; one switched off for Studio, dimmed.
         let mut x = r.right() - LOGO;
@@ -497,7 +497,7 @@ fn draw_days(ui: &mut Ui, st: &mut AppState, left: Rect, list: Rect, compact: bo
         let ring = top_day(&lines, st.ui.today_scroll).filter(|d| *d != w.today);
         let (day, weather_toggle) = draw_weeks_grid(ui, st, left, Some((&w, answer.apps)), ring);
         if weather_toggle {
-            st.ui.today_weather = !st.ui.today_weather;
+            st.page = crate::pages::PageKind::Weather;
         }
         if let Some(day) = day {
             // Today goes back to the top; another date starts the list (from the next frame, which the click asks for).
@@ -858,7 +858,7 @@ fn draw_tiles(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32)>
         draw_tile(ui, cell, tile, resp.as_ref().is_some_and(|r| r.hovered), card);
         if resp.as_ref().is_some_and(|r| r.clicked) {
             if is_weather_cell {
-                st.ui.today_weather = true;
+                st.page = crate::pages::PageKind::Weather;
             } else {
                 st.cmd(Command::OpenSystem(modules[i]));
             }
