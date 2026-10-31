@@ -296,6 +296,18 @@ pub fn active_ticker_info(st: &AppState) -> Option<(String, String, Option<Color
         } else {
             Some((code, "\u{2014}".to_string(), Some(palette::TEXT_DIM)))
         }
+    } else if pin.source == "weather" {
+        let city = if pin.code.is_empty() || pin.code == "WEATHER" {
+            st.weather.report.as_ref().map(|r| r.city.clone()).unwrap_or_else(|| "Weather".into())
+        } else {
+            pin.code.clone()
+        };
+        if let Some(ref r) = st.weather.report {
+            let val_str = r.idle_text();
+            Some((city, val_str, Some(palette::ORANGE)))
+        } else {
+            Some((city, "Loading...".into(), Some(palette::TEXT_DIM)))
+        }
     } else {
         None
     }

@@ -332,6 +332,8 @@ pub struct PageUiState {
     /// The next draw scrolls the list to `today_pick` (or back to today).
     pub today_jump: bool,
     pub today_drawn: f64,
+    /// Shows weather view instead of stats in Today page tiles.
+    pub today_weather: bool,
     /// Smoothly animated lyric scroll position (line index as float).
     pub lyric_pos: f32,
     pub lyric_track: String,
@@ -602,6 +604,13 @@ impl CryptoState {
     }
 }
 
+/// Real-time weather state from Open-Meteo.
+#[derive(Clone, Debug, Default)]
+pub struct WeatherState {
+    pub report: Option<poni_core::weather::WeatherReport>,
+    pub last_fetched: f64,
+}
+
 /// The Prayer times add-on's live state.
 #[derive(Clone, Debug, Default)]
 pub struct PrayerState {
@@ -861,6 +870,8 @@ pub struct AppState {
     pub stocks: StocksState,
     /// The Crypto add-on's prices (its list: `store.crypto`).
     pub crypto: CryptoState,
+    /// Real-time weather from Open-Meteo.
+    pub weather: WeatherState,
     /// The Downloads page's jobs (`poni_core::downloads`), in memory only.
     pub downloads: poni_core::downloads::Jobs,
     /// This app offers the Downloader: Windows outside the Microsoft Store
@@ -951,6 +962,7 @@ impl AppState {
             recorder: false,
             stocks: StocksState::default(),
             crypto: CryptoState::default(),
+            weather: WeatherState::default(),
             downloads: poni_core::downloads::Jobs::default(),
             downloader_offered: false,
             rec: RecView::default(),

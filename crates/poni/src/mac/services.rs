@@ -72,6 +72,9 @@ pub mod stocks;
 // And the Crypto page's prices from Binance.
 #[path = "../services/crypto.rs"]
 pub mod crypto;
+// And Weather from Open-Meteo.
+#[path = "../services/weather.rs"]
+pub mod weather;
 // And the AI tab's worker (`studio_usage` does the reading).
 #[path = "../services/usage.rs"]
 pub mod usage;

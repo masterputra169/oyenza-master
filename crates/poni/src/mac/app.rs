@@ -522,6 +522,9 @@ pub struct App {
     crypto: Option<services::crypto::CryptoService>,
     /// The Crypto page was on screen at the last look (`set_crypto_watch`).
     crypto_open: bool,
+    /// Weather service and state (`set_weather_watch`).
+    weather: Option<services::weather::WeatherService>,
+    weather_open: bool,
     /// The AI tab's worker: started the first time the tab opens or its
     /// notices are on (`set_usage_watch`).
     usage: Option<services::usage::UsageService>,
@@ -668,6 +671,8 @@ impl App {
             stocks_open: false,
             crypto: None,
             crypto_open: false,
+            weather: None,
+            weather_open: false,
             usage: None,
             usage_watch: services::usage::Watch::default(),
             updater: None,
@@ -1561,6 +1566,7 @@ impl App {
         self.tell_oyenza_activity();
         self.set_stocks_watch();
         self.set_crypto_watch();
+        self.set_weather_watch();
         self.set_usage_watch();
         self.apply_fullscreen();
     }
@@ -1792,6 +1798,11 @@ impl App {
             AppEvent::Cities { file, got } => pages::prayer::cities_came(&mut self.st, file, got),
             AppEvent::Stocks(ev) => self.st.stocks.apply(ev, self.st.unix),
             AppEvent::Crypto(ev) => self.st.crypto.apply(ev),
+            AppEvent::Weather(report) => {
+                self.st.weather.report = Some(report);
+                self.st.weather.last_fetched = self.st.now;
+                self.request_frame();
+            }
             AppEvent::Usage(ev) => self.on_usage(ev),
             AppEvent::AdzanEnded => self.adzan_ended(),
             AppEvent::Log(s) => pinfo!("{s}"),
@@ -2948,6 +2959,33 @@ impl App {
         }
     }
 
+    fn set_weather_watch(&mut self) {
+        let away = self.away.0 || self.away.1;
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
+        let open = (self.mode == Mode::Expanded(PageKind::Today) || ticker_active) && !away && !self.st.power.saver;
+        if !open && !self.weather_open {
+            return;
+        }
+        self.weather_open = open;
+        let (lat, lng, city) = if let Some(ref p) = self.st.prayer.place {
+            (p.lat, p.lng, p.label.clone())
+        } else if let Some((lat, lng, _)) = self.st.prayer.last_fix {
+            (lat, lng, "Local".into())
+        } else {
+            (-6.2088, 106.8456, "Jakarta".into())
+        };
+        let w = services::weather::Watch { open, lat, lng, city };
+        if self.weather.is_none() && w.open {
+            match services::weather::WeatherService::start(self.sink.clone()) {
+                Ok(s) => self.weather = Some(s),
+                Err(e) => pwarn!("service weather: unavailable ({e})"),
+            }
+        }
+        if let Some(s) = &self.weather {
+            s.watch(w);
+        }
+    }
+
     /// The Today page came on screen or went: the worker asks for the day only meanwhile.
     fn set_today_watch(&mut self, on: bool) {
         if on != self.today_watch {
@@ -3496,6 +3534,7 @@ impl App {
         self.set_pro_shown(matches!(self.mode, Mode::Expanded(PageKind::Ielts | PageKind::Notes | PageKind::Addons)));
         self.set_stocks_watch();
         self.set_crypto_watch();
+        self.set_weather_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge (below the menu
         // bar for what hangs under a notch).

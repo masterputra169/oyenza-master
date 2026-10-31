@@ -172,7 +172,10 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         return;
     }
     if !compact {
-        draw_weeks_grid(ui, st, left, None, None);
+        let (_, weather_toggle) = draw_weeks_grid(ui, st, left, None, None);
+        if weather_toggle {
+            st.ui.today_weather = !st.ui.today_weather;
+        }
     }
     // The bottom-right tile (or the card) shares the Pill card's corner.
     let card = super::card::pill_card(st, area);
@@ -250,16 +253,37 @@ fn draw_ask(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32)>, 
 /// Monday: today filled, a dot under each date for what's on it, and the date
 /// at the top of the list ringed. With the days, a date from today to the last
 /// one the answer speaks for can be clicked: returns the one clicked.
-fn draw_weeks_grid(ui: &mut Ui, st: &AppState, r: Rect, days: Option<(&Weeks, Sources)>, ring: Option<i64>) -> Option<i64> {
+fn draw_weeks_grid(ui: &mut Ui, st: &AppState, r: Rect, days: Option<(&Weeks, Sources)>, ring: Option<i64>) -> (Option<i64>, bool) {
     let t = st.local;
     if !valid_date(&t) {
-        return None;
+        return (None, false);
     }
     let today = days_from_civil(t.year, t.month, t.day);
     let weekday = WEEKDAY_LONG[weekday_from_days(today) as usize % 7].to_uppercase();
     ui.c.text(&weekday, Rect::new(r.x, r.y, r.w, 16.0), &TextStyle::caption().weight(Weight::Bold).color(st.accent));
     let date = format!("{} {}", t.day, MONTH_LONG[(t.month.clamp(1, 12) - 1) as usize]);
-    ui.c.text(&date, Rect::new(r.x, r.y + 16.0, r.w, 24.0), &TextStyle::value());
+    let date_st = TextStyle::value();
+    let (dw, _) = ui.c.measure(&date, &date_st, r.w);
+    ui.c.text(&date, Rect::new(r.x, r.y + 16.0, dw + 4.0, 24.0), &date_st);
+
+    let mut weather_toggle = false;
+    if let Some(ref w) = st.weather.report {
+        let w_label = format!("{} {:.0}°", w.icon_emoji(), w.temp);
+        let wx = r.x + dw + 10.0;
+        let wr = Rect::new(wx, r.y + 18.0, (r.right() - wx).max(46.0), 20.0);
+        let resp = ui.button(wid("today.weather_toggle"), wr);
+        if resp.clicked {
+            weather_toggle = true;
+        }
+        let w_col = if st.ui.today_weather {
+            st.accent
+        } else if resp.hovered {
+            Color::white(0.95)
+        } else {
+            palette::TEXT_DIM
+        };
+        ui.c.text(&w_label, wr, &TextStyle::footnote().weight(Weight::Semibold).color(w_col));
+    }
     if let Some((_, apps)) = days {
         // The apps it reads, at the top right; one switched off for Studio, dimmed.
         let mut x = r.right() - LOGO;
@@ -339,7 +363,7 @@ fn draw_weeks_grid(ui: &mut Ui, st: &AppState, r: Rect, days: Option<(&Weeks, So
             }
         }
     }
-    clicked
+    (clicked, weather_toggle)
 }
 
 // ------------------------------------------------------------------ the days
@@ -471,7 +495,11 @@ fn draw_days(ui: &mut Ui, st: &mut AppState, left: Rect, list: Rect, compact: bo
 
     if !compact {
         let ring = top_day(&lines, st.ui.today_scroll).filter(|d| *d != w.today);
-        if let Some(day) = draw_weeks_grid(ui, st, left, Some((&w, answer.apps)), ring) {
+        let (day, weather_toggle) = draw_weeks_grid(ui, st, left, Some((&w, answer.apps)), ring);
+        if weather_toggle {
+            st.ui.today_weather = !st.ui.today_weather;
+        }
+        if let Some(day) = day {
             // Today goes back to the top; another date starts the list (from the next frame, which the click asks for).
             st.ui.today_pick = (day != w.today).then_some(day);
             st.ui.today_jump = true;
@@ -712,13 +740,107 @@ struct Tile {
     detail_short: String,
 }
 
+fn weather_tile(w: &poni_core::weather::WeatherReport) -> Tile {
+    Tile {
+        icon: Icon::Clock,
+        label: "Weather",
+        frac: None,
+        color: palette::ORANGE,
+        value: format!("{:.0}°C", w.temp),
+        detail: format!("{} · {}", w.city, w.condition()),
+        detail_short: format!("{:.0}°C {}", w.temp, w.condition()),
+    }
+}
+
+fn draw_weather(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32)>) {
+    if r.w < 120.0 {
+        return;
+    }
+    super::card::fill_box(ui, card, r, TILE_RADIUS, palette::SURFACE);
+    let inner = r.inset(14.0, 12.0);
+
+    let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
+    let city = st.weather.report.as_ref().map(|w| w.city.as_str()).unwrap_or("Lokasi");
+    let city_label = format!("📍 {city}");
+    ui.c.text(&city_label, Rect::new(inner.x, inner.y, 140.0, 20.0), &TextStyle::caption().weight(Weight::Bold).color(st.accent));
+
+    // Right header buttons: [Stats] and [Pin]
+    let mut bx = inner.right();
+    let stats_w = 48.0;
+    bx -= stats_w;
+    if ui.pill(wid("today.to_stats"), Rect::new(bx, inner.y, stats_w, 20.0), "Stats", None, PillStyle::Utility).clicked {
+        st.ui.today_weather = false;
+    }
+
+    bx -= 6.0;
+    let pin_w = if is_pinned { 68.0 } else { 58.0 };
+    bx -= pin_w;
+    let pin_label = if is_pinned { "Pinned" } else { "Pin" };
+    let pin_icon = if is_pinned { Some(Icon::PinFill) } else { Some(Icon::Pin) };
+    let pin_style = if is_pinned { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
+    if ui.pill(wid("today.pin_weather"), Rect::new(bx, inner.y, pin_w, 20.0), pin_label, pin_icon, pin_style).clicked {
+        if is_pinned {
+            st.store.ticker = None;
+        } else {
+            st.store.ticker = Some(poni_core::store::TickerPin {
+                enabled: true,
+                source: "weather".into(),
+                code: city.to_string(),
+            });
+        }
+        st.save();
+    }
+
+    if let Some(ref w) = st.weather.report {
+        let temp_str = format!("{:.0}°C {}", w.temp, w.icon_emoji());
+        ui.c.text(&temp_str, Rect::new(inner.x, inner.y + 24.0, inner.w, 40.0), &TextStyle::display());
+
+        let sub = format!("{} · Terasa {:.0}°C", w.condition(), w.feels_like);
+        ui.c.text(&sub, Rect::new(inner.x, inner.y + 64.0, inner.w, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM));
+
+        let my = inner.y + 90.0;
+        let mh = (inner.bottom() - my).max(40.0);
+        let cols = Rect::new(inner.x, my, inner.w, mh).columns(3, 8.0);
+
+        super::card::fill_box(ui, None, cols[0], 10.0, palette::SURFACE_HOVER);
+        ui.c.text("Kelembaban", Rect::new(cols[0].x + 8.0, cols[0].y + 6.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text(&format!("{}%", w.humidity), Rect::new(cols[0].x + 8.0, cols[0].y + 20.0, cols[0].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold));
+
+        super::card::fill_box(ui, None, cols[1], 10.0, palette::SURFACE_HOVER);
+        ui.c.text("Angin", Rect::new(cols[1].x + 8.0, cols[1].y + 6.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text(&format!("{:.1} km/h", w.wind_speed), Rect::new(cols[1].x + 8.0, cols[1].y + 20.0, cols[1].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold));
+
+        super::card::fill_box(ui, None, cols[2], 10.0, palette::SURFACE_HOVER);
+        ui.c.text("Sumber Data", Rect::new(cols[2].x + 8.0, cols[2].y + 6.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text("Open-Meteo", Rect::new(cols[2].x + 8.0, cols[2].y + 20.0, cols[2].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
+    } else {
+        ui.c.text("Memuat cuaca real-time Open-Meteo...", Rect::new(inner.x, inner.y + 40.0, inner.w, 24.0), &TextStyle::body().color(palette::TEXT_DIM));
+    }
+}
+
 fn draw_tiles(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32)>) {
     if r.w < 120.0 {
         return;
     }
+    if st.ui.today_weather {
+        draw_weather(ui, st, r, card);
+        return;
+    }
     let s = &st.stats;
     let battery = st.power.has_battery;
-    let tiles = [cpu_tile(s), memory_tile(s), disk_tile(s), if battery { battery_tile(&st.power) } else { uptime_tile(st) }];
+    let has_weather = st.weather.report.is_some();
+    let tiles = [
+        cpu_tile(s),
+        memory_tile(s),
+        disk_tile(s),
+        if has_weather {
+            weather_tile(st.weather.report.as_ref().unwrap())
+        } else if battery {
+            battery_tile(&st.power)
+        } else {
+            uptime_tile(st)
+        },
+    ];
     // With System on, each ring opens its module on the System page (uptime
     // lives under CPU there); without it the tiles are only to read.
     let modules = [Module::Cpu, Module::Memory, Module::Drives, if battery { Module::Battery } else { Module::Cpu }];
@@ -727,10 +849,19 @@ fn draw_tiles(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32)>
     for (i, tile) in tiles.iter().enumerate() {
         let row = rows[i / 2];
         let cell = row.columns(2, TILE_GAP)[i % 2];
-        let resp = system.then(|| ui.button(wid_n("today-tile", i as u64), cell));
-        draw_tile(ui, cell, tile, resp.is_some_and(|r| r.hovered), card);
-        if resp.is_some_and(|r| r.clicked) {
-            st.cmd(Command::OpenSystem(modules[i]));
+        let is_weather_cell = i == 3 && has_weather;
+        let resp = if is_weather_cell || system {
+            Some(ui.button(wid_n("today-tile", i as u64), cell))
+        } else {
+            None
+        };
+        draw_tile(ui, cell, tile, resp.as_ref().is_some_and(|r| r.hovered), card);
+        if resp.as_ref().is_some_and(|r| r.clicked) {
+            if is_weather_cell {
+                st.ui.today_weather = true;
+            } else {
+                st.cmd(Command::OpenSystem(modules[i]));
+            }
         }
     }
 }
