@@ -1991,8 +1991,9 @@ impl App {
         }
         self.weather_open = open;
         let (lat, lng, city) = self.get_weather_location();
+        let seq = self.st.weather.refresh_seq;
         if let Some(s) = self.services.as_ref() {
-            s.weather_watch(services::weather::Watch { open, lat, lng, city });
+            s.weather_watch(services::weather::Watch { open, lat, lng, city, seq });
         }
     }
 

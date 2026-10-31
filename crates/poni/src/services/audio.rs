@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use windows::core::{implement, Interface, Result, PCWSTR};
-use windows::Win32::Foundation::E_FAIL;
+use windows::Win32::Foundation::{E_FAIL, RPC_E_CHANGED_MODE};
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl};
 use windows::Win32::Media::Audio::{
     eConsole, eMultimedia, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl,
@@ -180,9 +180,9 @@ struct ComApartment {
 impl ComApartment {
     fn enter_mta() -> Self {
         // S_OK and S_FALSE both need a matching CoUninitialize; a failure
-        // (e.g. RPC_E_CHANGED_MODE) must not be balanced.
+        // (e.g. RPC_E_CHANGED_MODE on the STA UI thread) must not be balanced.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if hr.is_err() {
+        if hr.is_err() && hr != RPC_E_CHANGED_MODE {
             crate::pwarn!("audio: CoInitializeEx failed ({hr:?})");
         }
         Self { initialized: hr.is_ok() }

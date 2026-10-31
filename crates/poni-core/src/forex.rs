@@ -1,8 +1,8 @@
-//! Real-time Forex (Kurs Valas) and Gold (Emas Antam) models and calculations.
+//! Real-time Forex & Commodities models, watchlists, and calculations.
 //!
 //! Complies with the repository rule:
 //! - Pure Rust in poni-core, zero CPU at rest.
-//! - Free public endpoints (open.er-api.com and Binance vision PAXG).
+//! - Free public endpoints (open.er-api.com, jsdelivr currency-api, Binance PAXG, Yahoo Finance).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,11 +12,28 @@ pub const TROY_OUNCE_GRAMS: f64 = 31.1034768;
 /// Antam physical gold manufacturing & tax premium over international spot.
 pub const ANTAM_PREMIUM_FACTOR: f64 = 1.035;
 
+/// Default watchlist order for Forex & Commodities.
+pub const DEFAULT_SYMBOLS: &[&str] = &[
+    "USD/IDR",
+    "GOLD",
+    "SILVER",
+    "OIL",
+    "SGD/IDR",
+    "EUR/IDR",
+    "JPY/IDR",
+    "SAR/IDR",
+    "MYR/IDR",
+    "CNY/IDR",
+    "AUD/IDR",
+    "GBP/IDR",
+];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ForexQuote {
     pub symbol: String,
     pub name: String,
     pub rate: f64,
+    pub open: f64,
     pub prev_close: f64,
     pub low: f64,
     pub high: f64,
@@ -32,13 +49,38 @@ impl ForexQuote {
         poni_core_trend(self.change_pct)
     }
 
+    pub fn is_usd_priced(&self) -> bool {
+        matches!(self.symbol.as_str(), "OIL" | "MINYAK" | "WTI")
+    }
+
     pub fn formatted_rate(&self) -> String {
-        if self.symbol == "MINYAK" {
-            format!("${:.2} /bbl", self.rate)
-        } else if self.symbol == "PERAK" {
-            format!("{} /gr", fmt_idr(self.rate, false))
+        fmt_quote_val(&self.symbol, self.rate)
+    }
+
+    pub fn formatted_change(&self, show_pct: bool) -> String {
+        if show_pct {
+            let sign = if self.change_pct > 0.005 {
+                "+"
+            } else if self.change_pct < -0.005 {
+                "\u{2212}"
+            } else {
+                ""
+            };
+            format!("{sign}{:.2}%", self.change_pct.abs())
         } else {
-            fmt_idr(self.rate, self.is_gold)
+            let diff = self.rate - self.prev_close;
+            let sign = if diff > 0.0 {
+                "+"
+            } else if diff < 0.0 {
+                "\u{2212}"
+            } else {
+                ""
+            };
+            if self.is_usd_priced() {
+                format!("{sign}${:.2}", diff.abs())
+            } else {
+                format!("{sign}{}", fmt_idr_plain(diff.abs()))
+            }
         }
     }
 
@@ -48,8 +90,47 @@ impl ForexQuote {
     }
 }
 
+pub fn fmt_quote_val(symbol: &str, val: f64) -> String {
+    match symbol.to_ascii_uppercase().as_str() {
+        "OIL" | "MINYAK" | "WTI" => format!("${:.2}", val),
+        "GOLD" | "EMAS" | "XAU/IDR" => fmt_idr(val, true),
+        "SILVER" | "PERAK" | "XAG/IDR" => format!("{} /g", fmt_idr(val, false)),
+        _ => fmt_idr(val, false),
+    }
+}
+
+pub fn fmt_idr_plain(val: f64) -> String {
+    let rounded = val.round() as i64;
+    let s = rounded.abs().to_string();
+    let mut out = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    for (i, c) in chars.into_iter().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn poni_core_trend(pct: f64) -> i8 {
-    if pct > 0.05 { 1 } else if pct < -0.05 { -1 } else { 0 }
+    if pct > 0.02 { 1 } else if pct < -0.02 { -1 } else { 0 }
+}
+
+/// Optional live commodity overrides from market feeds (Binance PAXG, Yahoo Finance GC=F, SI=F, CL=F).
+#[derive(Clone, Debug, Default)]
+pub struct CommodityFeeds {
+    /// Gold spot USD/oz and 24h change %
+    pub gold_usd: Option<(f64, f64)>,
+    /// Silver spot USD/oz and 24h change %
+    pub silver_usd: Option<(f64, f64)>,
+    /// WTI Crude Oil USD/bbl and 24h change %
+    pub oil_usd: Option<(f64, f64)>,
+    /// Real intraday sparklines keyed by symbol
+    pub sparks: HashMap<String, Vec<(u16, f32)>>,
+    /// Real 24h change % overrides keyed by symbol
+    pub pcts: HashMap<String, f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -59,95 +140,118 @@ pub struct ForexBoard {
 }
 
 impl ForexBoard {
+    pub fn default_board() -> Self {
+        let mut rates = HashMap::new();
+        rates.insert("IDR".into(), 18132.0);
+        rates.insert("SGD".into(), 1.2782);
+        rates.insert("EUR".into(), 0.8956);
+        rates.insert("JPY".into(), 157.49);
+        rates.insert("SAR".into(), 3.7500);
+        rates.insert("MYR".into(), 4.3850);
+        rates.insert("CNY".into(), 7.1250);
+        rates.insert("AUD".into(), 1.5180);
+        rates.insert("GBP".into(), 0.7715);
+        Self::from_rates(&rates, Some(3898.0), 0)
+    }
+
     pub fn quote(&self, sym: &str) -> Option<&ForexQuote> {
-        let upper = sym.to_ascii_uppercase();
-        self.quotes.iter().find(|q| q.symbol.to_ascii_uppercase() == upper || (upper == "EMAS" && q.is_gold))
+        let upper = normalize_symbol(sym);
+        self.quotes.iter().find(|q| q.symbol.eq_ignore_ascii_case(&upper))
     }
 
     pub fn from_rates(rates: &HashMap<String, f64>, paxg_usd: Option<f64>, now_unix: u64) -> Self {
-        let idr = *rates.get("IDR").unwrap_or(&18130.0);
-        let mut quotes = Vec::new();
+        let feeds = CommodityFeeds {
+            gold_usd: paxg_usd.map(|p| (p, -0.24)),
+            ..Default::default()
+        };
+        Self::from_rates_and_feeds(rates, &feeds, now_unix)
+    }
+
+    pub fn from_rates_and_feeds(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, now_unix: u64) -> Self {
+        let idr = *rates.get("IDR").unwrap_or(&18132.0);
+        let mut quotes = Vec::with_capacity(12);
+
+        let build = |sym: &str, name: &str, rate: f64, def_pct: f64, is_gold: bool, unit: &str| -> ForexQuote {
+            let pct = feeds.pcts.get(sym).copied().unwrap_or(def_pct);
+            let mut q = make_quote(sym, name, rate, pct, is_gold, unit);
+            if let Some(sp) = feeds.sparks.get(sym) {
+                if sp.len() >= 2 {
+                    let lo = sp.iter().map(|p| f64::from(p.1)).fold(q.low, f64::min);
+                    let hi = sp.iter().map(|p| f64::from(p.1)).fold(q.high, f64::max);
+                    q.low = lo;
+                    q.high = hi;
+                    q.open = f64::from(sp[0].1);
+                    q.spark = sp.clone();
+                }
+            }
+            q
+        };
 
         // 1. USD/IDR
-        quotes.push(make_quote("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));
+        quotes.push(build("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));
 
-        // 2. EMAS Antam (Logam Mulia)
-        let gold_usd_oz = paxg_usd.unwrap_or(3900.0);
+        // 2. GOLD (Antam / g)
+        let (gold_usd_oz, gold_pct) = feeds.gold_usd.unwrap_or((3898.9, -0.24));
         let gold_idr_gram = (gold_usd_oz * idr / TROY_OUNCE_GRAMS) * ANTAM_PREMIUM_FACTOR;
-        quotes.push(make_quote("EMAS", "Emas Antam (LM)", gold_idr_gram, -0.24, true, "per 1 gram"));
+        quotes.push(build("GOLD", "Gold (Antam / g)", gold_idr_gram, gold_pct, true, "per 1 gram"));
 
-        // 3. PERAK Antam (Silver LM)
-        let silver_usd_oz = 32.80;
+        // 3. SILVER (Antam / g)
+        let (silver_usd_oz, silver_pct) = feeds.silver_usd.unwrap_or((49.28, 0.45));
         let silver_idr_gram = (silver_usd_oz * idr / TROY_OUNCE_GRAMS) * 1.05;
-        quotes.push(make_quote("PERAK", "Perak Antam (LM)", silver_idr_gram, 0.45, false, "per 1 gram"));
+        quotes.push(build("SILVER", "Silver (Spot / g)", silver_idr_gram, silver_pct, false, "per 1 gram"));
 
-        // 4. MINYAK Mentah (WTI Crude Oil)
-        let oil_usd_barrel = 74.50;
-        quotes.push(make_quote("MINYAK", "Minyak Mentah (WTI)", oil_usd_barrel, -0.62, false, "per barel (USD)"));
+        // 4. OIL (WTI Crude Oil)
+        let (oil_usd_barrel, oil_pct) = feeds.oil_usd.unwrap_or((74.50, -0.62));
+        quotes.push(build("OIL", "WTI Crude Oil", oil_usd_barrel, oil_pct, false, "per barrel (USD)"));
 
         // 5. SGD/IDR
-        if let Some(&sgd) = rates.get("SGD") {
-            if sgd > 0.0 {
-                quotes.push(make_quote("SGD/IDR", "Singapore Dollar", idr / sgd, 0.08, false, "per 1 SGD"));
-            }
-        }
+        let sgd = rates.get("SGD").copied().filter(|&v| v > 0.0).unwrap_or(1.2782);
+        quotes.push(build("SGD/IDR", "Singapore Dollar", idr / sgd, 0.08, false, "per 1 SGD"));
 
         // 6. EUR/IDR
-        if let Some(&eur) = rates.get("EUR") {
-            if eur > 0.0 {
-                quotes.push(make_quote("EUR/IDR", "Euro", idr / eur, -0.15, false, "per 1 EUR"));
-            }
-        }
+        let eur = rates.get("EUR").copied().filter(|&v| v > 0.0).unwrap_or(0.8956);
+        quotes.push(build("EUR/IDR", "Euro", idr / eur, -0.15, false, "per 1 EUR"));
 
         // 7. JPY/IDR (per 100 JPY)
-        if let Some(&jpy) = rates.get("JPY") {
-            if jpy > 0.0 {
-                quotes.push(make_quote("JPY/IDR", "Japanese Yen (100)", (idr / jpy) * 100.0, 0.31, false, "per 100 JPY"));
-            }
-        }
+        let jpy = rates.get("JPY").copied().filter(|&v| v > 0.0).unwrap_or(157.49);
+        quotes.push(build("JPY/IDR", "Japanese Yen (100)", (idr / jpy) * 100.0, 0.31, false, "per 100 JPY"));
 
         // 8. SAR/IDR (Saudi Riyal)
-        if let Some(&sar) = rates.get("SAR") {
-            if sar > 0.0 {
-                quotes.push(make_quote("SAR/IDR", "Saudi Riyal", idr / sar, 0.05, false, "per 1 SAR"));
-            }
-        }
+        let sar = rates.get("SAR").copied().filter(|&v| v > 0.0).unwrap_or(3.7500);
+        quotes.push(build("SAR/IDR", "Saudi Riyal", idr / sar, 0.05, false, "per 1 SAR"));
 
         // 9. MYR/IDR
-        if let Some(&myr) = rates.get("MYR") {
-            if myr > 0.0 {
-                quotes.push(make_quote("MYR/IDR", "Malaysian Ringgit", idr / myr, 0.02, false, "per 1 MYR"));
-            }
-        }
+        let myr = rates.get("MYR").copied().filter(|&v| v > 0.0).unwrap_or(4.3850);
+        quotes.push(build("MYR/IDR", "Malaysian Ringgit", idr / myr, 0.06, false, "per 1 MYR"));
 
         // 10. CNY/IDR
-        if let Some(&cny) = rates.get("CNY") {
-            if cny > 0.0 {
-                quotes.push(make_quote("CNY/IDR", "Chinese Yuan", idr / cny, -0.04, false, "per 1 CNY"));
-            }
-        }
+        let cny = rates.get("CNY").copied().filter(|&v| v > 0.0).unwrap_or(7.1250);
+        quotes.push(build("CNY/IDR", "Chinese Yuan", idr / cny, -0.04, false, "per 1 CNY"));
 
         // 11. AUD/IDR
-        if let Some(&aud) = rates.get("AUD") {
-            if aud > 0.0 {
-                quotes.push(make_quote("AUD/IDR", "Australian Dollar", idr / aud, 0.18, false, "per 1 AUD"));
-            }
-        }
+        let aud = rates.get("AUD").copied().filter(|&v| v > 0.0).unwrap_or(1.5180);
+        quotes.push(build("AUD/IDR", "Australian Dollar", idr / aud, 0.18, false, "per 1 AUD"));
 
         // 12. GBP/IDR
-        if let Some(&gbp) = rates.get("GBP") {
-            if gbp > 0.0 {
-                quotes.push(make_quote("GBP/IDR", "British Pound", idr / gbp, -0.11, false, "per 1 GBP"));
-            }
-        }
+        let gbp = rates.get("GBP").copied().filter(|&v| v > 0.0).unwrap_or(0.7715);
+        quotes.push(build("GBP/IDR", "British Pound", idr / gbp, -0.11, false, "per 1 GBP"));
 
         Self { quotes, updated_at: now_unix }
     }
 }
 
+pub fn normalize_symbol(sym: &str) -> String {
+    match sym.trim().to_ascii_uppercase().as_str() {
+        "EMAS" | "XAU" | "XAU/IDR" | "GOLD" => "GOLD".into(),
+        "PERAK" | "XAG" | "XAG/IDR" | "SILVER" => "SILVER".into(),
+        "MINYAK" | "WTI" | "CL" | "OIL" => "OIL".into(),
+        other => other.into(),
+    }
+}
+
 fn make_quote(symbol: &str, name: &str, rate: f64, pct: f64, is_gold: bool, unit: &str) -> ForexQuote {
     let prev = rate / (1.0 + pct / 100.0);
-    let spread = (rate * 0.008).max(1.0);
+    let spread = (rate * 0.0045).max(if rate < 500.0 { 0.35 } else { 15.0 });
     let low = (rate.min(prev) - spread).max(0.01);
     let high = rate.max(prev) + spread;
     let spark = synthetic_spark(symbol, prev, rate, low, high);
@@ -155,6 +259,7 @@ fn make_quote(symbol: &str, name: &str, rate: f64, pct: f64, is_gold: bool, unit
         symbol: symbol.into(),
         name: name.into(),
         rate,
+        open: prev,
         prev_close: prev,
         low,
         high,
@@ -199,14 +304,14 @@ pub struct ForexHistory {
 pub fn sample_history(symbol: &str, today: i32, rate: f64) -> ForexHistory {
     let mut seed = symbol.bytes().fold(0x811C_9DC5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
     let mut closes = Vec::with_capacity(365);
-    let mut p = rate * 0.88;
+    let mut p = rate * 0.92;
     for d in (0..365).rev() {
         let day = today - d;
         seed ^= seed << 13;
         seed ^= seed >> 17;
         seed ^= seed << 5;
-        let step = (f64::from(seed % 1000) / 1000.0 - 0.49) * 0.025;
-        p = (p * (1.0 + step)).max(rate * 0.4);
+        let step = (f64::from(seed % 1000) / 1000.0 - 0.492) * 0.014;
+        p = (p * (1.0 + step)).max(rate * 0.5);
         closes.push((day, p));
     }
     let last_gen = closes.last().map_or(rate, |c| c.1);
@@ -229,19 +334,9 @@ pub fn today_num() -> i32 {
 }
 
 pub fn fmt_idr(val: f64, is_gold: bool) -> String {
-    let rounded = val.round() as i64;
-    let s = rounded.to_string();
-    let mut out = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    for (i, c) in chars.into_iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push('.');
-        }
-        out.push(c);
-    }
+    let out = fmt_idr_plain(val);
     if is_gold {
-        format!("Rp {} /gr", out)
+        format!("Rp {} /g", out)
     } else {
         format!("Rp {}", out)
     }
@@ -261,21 +356,23 @@ mod tests {
         rates.insert("SAR".into(), 3.75);
 
         let board = ForexBoard::from_rates(&rates, Some(3897.6), 1730366100);
-        assert!(board.quotes.len() >= 6);
+        assert_eq!(board.quotes.len(), 12);
 
         let usd = board.quote("USD/IDR").unwrap();
         assert_eq!(usd.formatted_rate(), "Rp 18.132");
         assert_eq!(usd.spark.len(), 48);
 
-        let emas = board.quote("EMAS").unwrap();
-        assert!(emas.rate > 2_000_000.0);
-        assert!(emas.formatted_rate().contains("/gr"));
+        let gold = board.quote("GOLD").unwrap();
+        assert!(gold.rate > 2_000_000.0);
+        assert!(gold.formatted_rate().contains("/g"));
+        // Backward-compatible alias lookup
+        assert!(board.quote("EMAS").is_some());
 
-        let perak = board.quote("PERAK").unwrap();
-        assert!(perak.rate > 15_000.0);
+        let silver = board.quote("SILVER").unwrap();
+        assert!(silver.rate > 15_000.0);
 
-        let minyak = board.quote("MINYAK").unwrap();
-        assert!(minyak.rate > 50.0);
+        let oil = board.quote("OIL").unwrap();
+        assert!(oil.rate > 50.0);
 
         let sgd = board.quote("SGD/IDR").unwrap();
         assert!(sgd.rate > 14_000.0);

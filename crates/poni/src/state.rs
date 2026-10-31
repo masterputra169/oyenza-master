@@ -612,11 +612,12 @@ impl CryptoState {
     }
 }
 
-/// Real-time weather state from Open-Meteo.
+/// Real-time weather state from MET Norway & Open-Meteo.
 #[derive(Clone, Debug, Default)]
 pub struct WeatherState {
     pub report: Option<poni_core::weather::WeatherReport>,
     pub last_fetched: f64,
+    pub refresh_seq: u64,
 }
 
 /// Real-time Forex & Gold state.
@@ -986,6 +987,7 @@ impl AppState {
             weather: WeatherState {
                 report: cached_weather,
                 last_fetched: 0.0,
+                refresh_seq: 0,
             },
             forex: ForexState::default(),
             app_sessions: Vec::new(),

@@ -1,4 +1,4 @@
-//! Real-time Weather page powered by Open-Meteo.
+//! Real-time Weather page powered by MET Norway & Open-Meteo.
 //!
 //! Complies with the repository rule:
 //! - Nothing runs at rest: updates every 15 minutes only while watched.
@@ -19,7 +19,6 @@ pub const PRESET_CITIES: &[(&str, f64, f64)] = &[
     ("Yogya", -7.7956, 110.3695),
     ("Tokyo", 35.6762, 139.6503),
     ("Singapore", 1.3521, 103.8198),
-    ("London", 51.5074, -0.1278),
 ];
 
 pub fn height(_st: &AppState) -> f32 {
@@ -35,7 +34,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         if let Some(ref w) = st.weather.report {
             w.city.clone()
         } else {
-            "Device Location".to_string()
+            "Jakarta".to_string()
         }
     });
 
@@ -43,13 +42,17 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
 
     // Header row
     let city_title = if is_auto_device {
-        format!("📍 Device Location · {current_city}")
+        if current_city.is_empty() || current_city.eq_ignore_ascii_case("Device Location") || current_city.eq_ignore_ascii_case("Local Device") {
+            "📍 Device Location (Auto)".to_string()
+        } else {
+            format!("📍 Device Location · {current_city}")
+        }
     } else {
         format!("📍 Destination · {current_city}")
     };
     ui.c.text(
         &city_title,
-        Rect::new(area.x, top_y, 230.0, 24.0),
+        Rect::new(area.x, top_y, 260.0, 24.0),
         &TextStyle::body().weight(Weight::Bold).color(st.accent),
     );
 
@@ -58,6 +61,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let ref_w = 64.0;
     bx -= ref_w;
     if ui.pill(wid("weather.refresh"), Rect::new(bx, top_y, ref_w, 22.0), "Refresh", None, PillStyle::Utility).clicked {
+        st.weather.refresh_seq = st.weather.refresh_seq.wrapping_add(1);
         st.weather.last_fetched = 0.0;
         st.save();
     }
@@ -80,25 +84,26 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         st.save();
     }
 
-    // City Selector Pills (Horizontal): First is "📍 Auto (Device)", followed by destinations
+    // City Selector Pills (Horizontal): First is "Auto (Device)", followed by destinations
     let city_y = top_y + 28.0;
     let chip_h = 22.0;
     let mut cx = area.x;
 
     // Auto Device Chip
-    let auto_w = 96.0;
+    let auto_w = 88.0;
     let auto_style = if is_auto_device { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
     let auto_resp = ui.pill(wid("weather.city_auto"), Rect::new(cx, city_y, auto_w, chip_h), "Auto (Device)", None, auto_style);
     if auto_resp.clicked && !is_auto_device {
         st.store.weather_city = None;
+        st.weather.refresh_seq = st.weather.refresh_seq.wrapping_add(1);
         st.weather.last_fetched = 0.0;
         st.save();
     }
-    cx += auto_w + 6.0;
+    cx += auto_w + 5.0;
 
     for (i, (name, _, _)) in PRESET_CITIES.iter().enumerate() {
         let is_sel = !is_auto_device && current_city.eq_ignore_ascii_case(name);
-        let chip_w = (name.len() as f32 * 7.5 + 16.0).max(44.0);
+        let chip_w = (name.len() as f32 * 6.8 + 14.0).max(42.0);
         if cx + chip_w > area.right() {
             break;
         }
@@ -110,10 +115,11 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         let resp = ui.pill(wid_n("weather.city", i as u64), Rect::new(cx, city_y, chip_w, chip_h), name, None, style);
         if resp.clicked && !is_sel {
             st.store.weather_city = Some(name.to_string());
+            st.weather.refresh_seq = st.weather.refresh_seq.wrapping_add(1);
             st.weather.last_fetched = 0.0;
             st.save();
         }
-        cx += chip_w + 6.0;
+        cx += chip_w + 5.0;
     }
 
     // Main Hero Weather Card
@@ -150,12 +156,12 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         ui.c.text(time_str, Rect::new(rx, hero_r.y + 56.0, rw, 18.0), &TextStyle::caption().color(palette::TEXT_DIM));
     } else {
         ui.c.text(
-            "Fetching real-time weather from Open-Meteo...",
+            "Updating live weather forecast...",
             Rect::new(hero_r.x + 16.0, hero_r.y + 24.0, hero_r.w - 32.0, 24.0),
             &TextStyle::body().color(palette::TEXT_DIM),
         );
         ui.c.text(
-            "Select a destination city or Auto (Device) to update weather.",
+            "Select a destination city or Auto (Device) to view real-time conditions.",
             Rect::new(hero_r.x + 16.0, hero_r.y + 50.0, hero_r.w - 32.0, 20.0),
             &TextStyle::footnote().color(palette::TEXT_DIM),
         );
@@ -174,7 +180,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
             w.condition().to_string(),
         )
     } else {
-        ("-".into(), "-".into(), "-".into(), "Loading".into())
+        ("-".into(), "-".into(), "-".into(), "Updating".into())
     };
 
     // Metric 1: Humidity
@@ -195,9 +201,9 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     ui.c.text(&feels_val, Rect::new(cols[2].x + 8.0, cols[2].y + 24.0, cols[2].w - 16.0, 22.0), &TextStyle::body().weight(Weight::Bold));
     ui.c.text("Heat index", Rect::new(cols[2].x + 8.0, cols[2].y + 48.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 
-    // Metric 4: Condition / API
+    // Metric 4: Condition
     super::card::fill_box(ui, card, cols[3], 10.0, palette::SURFACE_HOVER);
     ui.c.text("Condition", Rect::new(cols[3].x + 8.0, cols[3].y + 8.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
     ui.c.text(&cond_val, Rect::new(cols[3].x + 8.0, cols[3].y + 24.0, cols[3].w - 16.0, 22.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
-    ui.c.text("Open-Meteo", Rect::new(cols[3].x + 8.0, cols[3].y + 48.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Live Forecast", Rect::new(cols[3].x + 8.0, cols[3].y + 48.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 }

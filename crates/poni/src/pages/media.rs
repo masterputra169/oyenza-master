@@ -38,9 +38,9 @@ use std::collections::HashMap;
 /// Content height with a media session (the play button's bottom + air).
 const H_SESSION: f32 = 148.0;
 /// Content height of the "Nothing playing" state.
-const H_EMPTY: f32 = 124.0;
+const H_EMPTY: f32 = 142.0;
 /// Content height of the Volume Mixer view.
-const H_MIXER: f32 = 186.0;
+const H_MIXER: f32 = 192.0;
 
 const ART: f32 = 104.0;
 const ART_RADIUS: f32 = 14.0;
@@ -333,9 +333,10 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         draw_session(ui, st, area, &mut a, &fr);
     } else {
         let r = Rect::new(area.x, area.y, area.w, H_EMPTY);
-        super::empty_state(ui, r, Icon::Music, "Nothing playing", "Play music in Spotify, a browser or any media app");
-        let mixer_w = 114.0;
-        let mixer_r = Rect::new(r.center().x - mixer_w / 2.0, r.y + 86.0, mixer_w, 24.0);
+        let empty_r = Rect::new(r.x, r.y - 6.0, r.w, 108.0);
+        super::empty_state(ui, empty_r, Icon::Music, "Nothing playing", "Play music in Spotify, a browser or any media app");
+        let mixer_w = 122.0;
+        let mixer_r = Rect::new(r.center().x - mixer_w / 2.0, r.y + 108.0, mixer_w, 26.0);
         if ui.pill(wid("media.open_mixer_empty"), mixer_r, "Volume Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
             st.ui.media_mixer_mode = true;
         }
@@ -408,12 +409,12 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
     };
     if let Some(label) = source {
         let dot = if playing { accent } else { accent.mul_alpha(0.45) };
-        draw_source(ui, mid.x, y0 + SOURCE_Y, mid.w - 120.0, &label, dot, scale);
+        draw_source(ui, mid.x, y0 + SOURCE_Y, mid.w - 76.0, &label, dot, scale);
     }
 
-    let mixer_w = 110.0;
+    let mixer_w = 70.0;
     let mixer_pill = Rect::new(mid.right() - mixer_w, y0 + SOURCE_Y - 2.0, mixer_w, 22.0);
-    if ui.pill(wid("media.open_mixer"), mixer_pill, "Volume Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
+    if ui.pill(wid("media.open_mixer"), mixer_pill, "Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
         st.ui.media_mixer_mode = true;
     }
 
@@ -1211,6 +1212,7 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let x0 = snap(area.x, scale);
     let y0 = snap(area.y, scale);
     let w = area.w;
+    let card = super::card::pill_card(st, area);
 
     // Refresh audio sessions every ~1.5s
     if st.now - st.app_sessions_time > 1.5 || st.app_sessions.is_empty() {
@@ -1221,20 +1223,21 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
     // Top Header
     let title_st = TextStyle::headline().weight(Weight::Bold);
     let sub_st = TextStyle::caption().color(palette::TEXT_DIM);
-    ui.c.text("Volume Mixer", Rect::new(x0, y0 - 4.0, 160.0, 20.0), &title_st);
-    ui.c.text("Per-app audio levels & mute controls", Rect::new(x0, y0 + 16.0, 240.0, 16.0), &sub_st);
+    ui.c.text("Volume Mixer", Rect::new(x0, y0, 180.0, 20.0), &title_st);
+    ui.c.text("Master output & per-application audio controls", Rect::new(x0, y0 + 20.0, 260.0, 16.0), &sub_st);
 
     // Back to Music button
-    let back_w = 110.0;
-    if ui.pill(wid("mixer.back"), Rect::new(x0 + w - back_w, y0 - 4.0, back_w, 24.0), "Now Playing", Some(Icon::Music), PillStyle::Utility).clicked {
+    let back_w = 104.0;
+    if ui.pill(wid("mixer.back"), Rect::new(x0 + w - back_w, y0 + 2.0, back_w, 24.0), "Player", Some(Icon::Music), PillStyle::Utility).clicked {
         st.ui.media_mixer_mode = false;
         return;
     }
 
     // Master Volume Row
-    let master_y = y0 + 38.0;
-    let card_r = Rect::new(x0, master_y, w, 32.0);
-    super::card::fill_box(ui, None, card_r, 10.0, palette::SURFACE);
+    let master_y = y0 + 42.0;
+    let row_h = 34.0;
+    let card_r = Rect::new(x0, master_y, w, row_h);
+    super::card::fill_box(ui, card, card_r, 10.0, palette::SURFACE);
 
     let m_icon = if st.volume.muted {
         Icon::VolumeMute
@@ -1243,48 +1246,49 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
     } else {
         Icon::Volume
     };
-    let m_icon_r = Rect::new(card_r.x + 8.0, card_r.y + 6.0, 20.0, 20.0);
+    let m_icon_r = Rect::new(card_r.x + 10.0, card_r.y + 5.0, 24.0, 24.0);
     let m_btn = ui.button(wid("mixer.master_mute"), m_icon_r);
     let m_col = if st.volume.muted { palette::RED } else if m_btn.hovered { palette::TEXT } else { st.accent };
     if m_btn.hovered {
-        ui.c.fill_circle(m_icon_r.center(), 10.0, Color::white(0.08));
+        ui.c.fill_circle(m_icon_r.center(), 11.0, Color::white(0.08));
     }
-    ui.c.icon(m_icon, Rect::from_center(m_icon_r.center(), 14.0, 14.0), m_col);
+    ui.c.icon(m_icon, Rect::from_center(m_icon_r.center(), 15.0, 15.0), m_col);
     if m_btn.clicked {
         let new_muted = !st.volume.muted;
         st.volume.muted = new_muted;
         crate::services::audio::set_master_mute(new_muted);
     }
 
-    ui.c.text("Master", Rect::new(card_r.x + 34.0, card_r.y + 7.0, 50.0, 18.0), &TextStyle::footnote().weight(Weight::Semibold));
+    let name_w = 124.0;
+    ui.c.text("Master Output", Rect::new(card_r.x + 40.0, card_r.y + 8.0, name_w, 18.0), &TextStyle::footnote().weight(Weight::Semibold));
 
-    let pct_w = 40.0;
-    let bar_x = card_r.x + 90.0;
-    let bar_w = (card_r.right() - bar_x - pct_w - 12.0).max(40.0);
-    let master_bar = Rect::new(bar_x, card_r.y + 14.0, bar_w, 4.0);
+    let pct_w = 44.0;
+    let bar_x = card_r.x + 40.0 + name_w + 10.0;
+    let bar_w = (card_r.right() - bar_x - pct_w - 14.0).max(40.0);
+    let master_bar = Rect::new(bar_x, card_r.y + 15.0, bar_w, 4.0);
     let scrub = ui.progress_bar(wid("mixer.master_slider"), master_bar, st.volume.level, st.accent, true);
     if let Some(f) = scrub.held.or(scrub.released) {
         st.volume.level = f;
         crate::services::audio::set_master_volume(f);
     }
 
-    let pct_str = format!("{}%", (st.volume.level * 100.0).round() as i32);
-    ui.c.text(&pct_str, Rect::new(card_r.right() - pct_w - 6.0, card_r.y + 7.0, pct_w, 18.0), &TextStyle::footnote().tabular().right());
+    let pct_str = if st.volume.muted { "Muted".into() } else { format!("{}%", (st.volume.level * 100.0).round() as i32) };
+    let pct_col = if st.volume.muted { palette::RED } else { palette::TEXT };
+    ui.c.text(&pct_str, Rect::new(card_r.right() - pct_w - 10.0, card_r.y + 8.0, pct_w, 18.0), &TextStyle::footnote().tabular().right().color(pct_col));
 
     // Apps Section
-    let app_y0 = master_y + 38.0;
+    let app_y0 = master_y + row_h + 6.0;
     if st.app_sessions.is_empty() {
-        let empty_r = Rect::new(x0, app_y0, w, 68.0);
-        super::card::fill_box(ui, None, empty_r, 10.0, palette::SURFACE);
-        ui.c.text("No other apps are currently playing audio", Rect::new(empty_r.x + 16.0, empty_r.y + 24.0, empty_r.w - 32.0, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM).center());
+        let empty_r = Rect::new(x0, app_y0, w, 72.0);
+        super::card::fill_box(ui, card, empty_r, 10.0, palette::SURFACE);
+        ui.c.text("No other applications are currently playing audio", Rect::new(empty_r.x + 16.0, empty_r.y + 26.0, empty_r.w - 32.0, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM).center());
     } else {
-        let row_h = 32.0;
         let gap = 6.0;
         let max_rows = 3;
         for (i, sess) in st.app_sessions.iter_mut().take(max_rows).enumerate() {
             let ry = app_y0 + (row_h + gap) * i as f32;
             let row_r = Rect::new(x0, ry, w, row_h);
-            super::card::fill_box(ui, None, row_r, 10.0, palette::SURFACE);
+            super::card::fill_box(ui, card, row_r, 10.0, palette::SURFACE);
 
             let a_icon = if sess.muted {
                 Icon::VolumeMute
@@ -1293,32 +1297,32 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
             } else {
                 Icon::Volume
             };
-            let a_icon_r = Rect::new(row_r.x + 8.0, row_r.y + 6.0, 20.0, 20.0);
+            let a_icon_r = Rect::new(row_r.x + 10.0, row_r.y + 5.0, 24.0, 24.0);
             let a_btn = ui.button(wid_n("mixer.app_mute", sess.pid as u64), a_icon_r);
             let a_col = if sess.muted { palette::RED } else if a_btn.hovered { palette::TEXT } else { palette::TEXT_DIM };
             if a_btn.hovered {
-                ui.c.fill_circle(a_icon_r.center(), 10.0, Color::white(0.08));
+                ui.c.fill_circle(a_icon_r.center(), 11.0, Color::white(0.08));
             }
-            ui.c.icon(a_icon, Rect::from_center(a_icon_r.center(), 14.0, 14.0), a_col);
+            ui.c.icon(a_icon, Rect::from_center(a_icon_r.center(), 15.0, 15.0), a_col);
             if a_btn.clicked {
                 sess.muted = !sess.muted;
                 crate::services::audio::set_app_mute(sess.pid, sess.muted);
             }
 
-            let name_w = 110.0;
-            ui.c.text(&sess.name, Rect::new(row_r.x + 34.0, row_r.y + 7.0, name_w, 18.0), &TextStyle::footnote().weight(Weight::Medium));
+            ui.c.text(&sess.name, Rect::new(row_r.x + 40.0, row_r.y + 8.0, name_w, 18.0), &TextStyle::footnote().weight(Weight::Medium));
 
-            let app_bar_x = row_r.x + 34.0 + name_w + 6.0;
-            let app_bar_w = (row_r.right() - app_bar_x - pct_w - 12.0).max(40.0);
-            let app_bar = Rect::new(app_bar_x, row_r.y + 14.0, app_bar_w, 4.0);
+            let app_bar_x = row_r.x + 40.0 + name_w + 10.0;
+            let app_bar_w = (row_r.right() - app_bar_x - pct_w - 14.0).max(40.0);
+            let app_bar = Rect::new(app_bar_x, row_r.y + 15.0, app_bar_w, 4.0);
             let scrub_app = ui.progress_bar(wid_n("mixer.app_slider", sess.pid as u64), app_bar, sess.volume, st.accent, true);
             if let Some(f) = scrub_app.held.or(scrub_app.released) {
                 sess.volume = f;
                 crate::services::audio::set_app_volume(sess.pid, f);
             }
 
-            let app_pct_str = format!("{}%", (sess.volume * 100.0).round() as i32);
-            ui.c.text(&app_pct_str, Rect::new(row_r.right() - pct_w - 6.0, row_r.y + 7.0, pct_w, 18.0), &TextStyle::footnote().tabular().right());
+            let app_pct_str = if sess.muted { "Muted".into() } else { format!("{}%", (sess.volume * 100.0).round() as i32) };
+            let app_pct_col = if sess.muted { palette::RED } else { palette::TEXT_DIM };
+            ui.c.text(&app_pct_str, Rect::new(row_r.right() - pct_w - 10.0, row_r.y + 8.0, pct_w, 18.0), &TextStyle::footnote().tabular().right().color(app_pct_col));
         }
     }
 }
