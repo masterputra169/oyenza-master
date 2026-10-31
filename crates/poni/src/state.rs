@@ -324,6 +324,8 @@ pub struct PageUiState {
     pub task_input: String,
     pub task_scroll: f32,
     pub shelf_scroll: f32,
+    /// Shows Clipboard History instead of files in Shelf page.
+    pub shelf_clipboard_mode: bool,
     /// The Today page's list: how far it's scrolled (DIPs), the date clicked
     /// in its grid (days since 1970-01-01), and when it was last drawn (mono
     /// time; a page drawn again after a while starts at today).

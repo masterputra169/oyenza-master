@@ -477,7 +477,7 @@ pub fn set_master_volume(level: f32) {
     let _apt = ComApartment::enter_mta();
     let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
     let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
-    if let Ok(volume) = (unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }) {
+    if let Ok(volume) = unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) } {
         let _ = unsafe { volume.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null()) };
     }
 }
@@ -486,7 +486,7 @@ pub fn set_master_mute(muted: bool) {
     let _apt = ComApartment::enter_mta();
     let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
     let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
-    if let Ok(volume) = (unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }) {
+    if let Ok(volume) = unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) } {
         let _ = unsafe { volume.SetMute(muted, std::ptr::null()) };
     }
 }

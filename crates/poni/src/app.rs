@@ -653,6 +653,7 @@ impl App {
         // The Downloader: not in the Microsoft Store build.
         st.downloader_offered = !crate::autostart::packaged();
         let selftest = selftest_dir.map(selftest::SelfTest::new);
+        let _ = unsafe { windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd) };
         let saved_settings = st.settings.clone();
         Ok(Self {
             hwnd,
@@ -1367,6 +1368,20 @@ impl App {
                 if let Some(s) = self.services.as_ref() {
                     if let Some(fs) = s.on_appbar_message(wp, lp, self.monitor.handle) {
                         self.on_event(AppEvent::Fullscreen(fs));
+                    }
+                }
+                Some(LRESULT(0))
+            }
+            WM_CLIPBOARDUPDATE => {
+                if !self.locked && !self.display_off {
+                    if let Some(text) = services::clipboard::read_text(self.hwnd) {
+                        let now_unix = self.st.unix;
+                        if self.st.store.shelf.add_clipboard_snippet(&text, now_unix) {
+                            self.st.save();
+                            if self.st.page == crate::pages::PageKind::Shelf && self.st.ui.shelf_clipboard_mode {
+                                self.request_frame();
+                            }
+                        }
                     }
                 }
                 Some(LRESULT(0))

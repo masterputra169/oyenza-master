@@ -19,3 +19,7 @@ pub fn set_text(text: &str) {
     pb.clearContents();
     let _ = pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
 }
+
+pub fn copy_text(text: &str) {
+    set_text(text);
+}

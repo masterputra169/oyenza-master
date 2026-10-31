@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SHELF_ITEMS: usize = 24;
+pub const MAX_CLIPBOARD_ITEMS: usize = 15;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShelfItem {
@@ -10,10 +11,18 @@ pub struct ShelfItem {
     pub added_unix: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardSnippet {
+    pub id: u64,
+    pub text: String,
+    pub added_unix: i64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Shelf {
     pub items: Vec<ShelfItem>,
+    pub clipboard: Vec<ClipboardSnippet>,
 }
 
 impl Shelf {
@@ -51,6 +60,35 @@ impl Shelf {
 
     pub fn paths(&self) -> Vec<String> {
         self.items.iter().map(|i| i.path.clone()).collect()
+    }
+
+    pub fn add_clipboard_snippet(&mut self, text: &str, now_unix: i64) -> bool {
+        let text = text.trim();
+        if text.is_empty() || text.len() > 50_000 {
+            return false;
+        }
+        if self.clipboard.first().is_some_and(|s| s.text == text) {
+            return false;
+        }
+        self.clipboard.retain(|s| s.text != text);
+        let id = self.clipboard.first().map_or(1, |s| s.id + 1);
+        self.clipboard.insert(0, ClipboardSnippet {
+            id,
+            text: text.to_string(),
+            added_unix: now_unix,
+        });
+        if self.clipboard.len() > MAX_CLIPBOARD_ITEMS {
+            self.clipboard.truncate(MAX_CLIPBOARD_ITEMS);
+        }
+        true
+    }
+
+    pub fn remove_clipboard_snippet(&mut self, id: u64) {
+        self.clipboard.retain(|s| s.id != id);
+    }
+
+    pub fn clear_clipboard(&mut self) {
+        self.clipboard.clear();
     }
 }
 

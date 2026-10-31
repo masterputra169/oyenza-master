@@ -30,6 +30,11 @@ pub fn read_text(hwnd: HWND) -> Option<String> {
     unsafe { read_unicode_text() }
 }
 
+/// Helper to set clipboard text without passing an explicit HWND.
+pub fn copy_text(text: &str) {
+    set_text(HWND::default(), text);
+}
+
 /// Put `text` on the clipboard as `CF_UNICODETEXT` (`hwnd` becomes the owner).
 pub fn set_text(hwnd: HWND, text: &str) {
     let mut units: Vec<u16> = text.encode_utf16().take(MAX_TEXT_UNITS).collect();

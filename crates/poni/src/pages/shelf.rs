@@ -70,6 +70,8 @@ pub const PHONE_OUTCOME_S: f64 = 8.0;
 pub fn height(st: &AppState) -> f32 {
     if st.phone.is_some() {
         PAGE_H + PHONE_GAP + PHONE_H
+    } else if st.ui.shelf_clipboard_mode {
+        186.0
     } else {
         PAGE_H
     }
@@ -118,6 +120,10 @@ enum Action {
     Remove(String),
     Clear,
     Undo,
+    ToggleClipboard,
+    CopySnippet(String),
+    RemoveSnippet(u64),
+    ClearClipboard,
 }
 
 fn key(path: &str) -> String {
@@ -163,7 +169,9 @@ fn draw_page(ui: &mut Ui, st: &mut AppState, area: Rect, l: &mut Local) {
         Some(_) => (Rect::new(area.x, area.y, area.w, PAGE_H), Some(Rect::new(area.x, area.y + PAGE_H + PHONE_GAP, area.w, PHONE_H))),
         None => (area, None),
     };
-    if items.is_empty() {
+    if st.ui.shelf_clipboard_mode {
+        draw_clipboard(ui, st, l, main, card, &mut actions);
+    } else if items.is_empty() {
         draw_empty(ui, st, l, main, card, &mut actions);
     } else {
         draw_items(ui, st, l, main, &items, dt, shown, card, &mut actions);
@@ -288,6 +296,23 @@ fn apply(st: &mut AppState, l: &mut Local, items: &[ShelfItem], actions: Vec<Act
                     l.count = st.store.shelf.items.len();
                     st.save();
                 }
+            }
+            Action::ToggleClipboard => {
+                st.ui.shelf_clipboard_mode = !st.ui.shelf_clipboard_mode;
+            }
+            Action::CopySnippet(text) => {
+                crate::services::clipboard::copy_text(&text);
+                let preview: String = text.chars().take(28).collect();
+                let subtitle = if text.len() > 28 { format!("{preview}…") } else { preview };
+                st.notify(Icon::Notes, st.accent, "Tersalin ke Clipboard", &subtitle, 2.5, None);
+            }
+            Action::RemoveSnippet(id) => {
+                st.store.shelf.remove_clipboard_snippet(id);
+                st.save();
+            }
+            Action::ClearClipboard => {
+                st.store.shelf.clear_clipboard();
+                st.save();
             }
         }
     }
@@ -494,6 +519,15 @@ fn draw_header(ui: &mut Ui, st: &AppState, l: &Local, head: Rect, items: &[Shelf
         right = phone_r.x;
     }
 
+    // Clipboard history toggle pill
+    let clip_w = ui.pill_width("Clipboard", true, true);
+    let clip_style = if st.ui.shelf_clipboard_mode { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
+    let clip_r = Rect::new(right - PILL_GAP - clip_w, head.y, clip_w, PILL_SMALL);
+    if ui.pill(wid("shelf.clip_toggle"), clip_r, "Clipboard", Some(Icon::Notes), clip_style).clicked {
+        actions.push(Action::ToggleClipboard);
+    }
+    right = clip_r.x;
+
     // No instructions by default: the row only describes the hovered tile
     // (where it lives) or a full shelf.
     let hint = match hovered.and_then(|i| items.get(i)) {
@@ -557,6 +591,92 @@ fn draw_drop_overlay(ui: &mut Ui, st: &AppState, zone: Rect, glow: f32, card: Op
     ui.c.set_alpha(base);
 }
 
+// ---------------------------------------------------------------- clipboard history
+
+fn draw_clipboard(ui: &mut Ui, st: &AppState, _l: &mut Local, area: Rect, _card: Option<(Rect, f32)>, actions: &mut Vec<Action>) {
+    let x0 = area.x;
+    let y0 = area.y;
+    let w = area.w;
+
+    // Header
+    let title_st = TextStyle::headline().weight(Weight::Bold);
+    let sub_st = TextStyle::caption().color(palette::TEXT_DIM);
+    ui.c.text("Riwayat Clipboard", Rect::new(x0, y0 - 4.0, 160.0, 20.0), &title_st);
+    ui.c.text("Teks yang baru disalin otomatis tercatat", Rect::new(x0, y0 + 16.0, 240.0, 16.0), &sub_st);
+
+    // Right pills: Clear (if any snippets) and Files (back to files)
+    let back_w = 68.0;
+    let back_r = Rect::new(x0 + w - back_w, y0 - 4.0, back_w, 24.0);
+    if ui.pill(wid("shelf.clip_back"), back_r, "Files", Some(Icon::Tray), PillStyle::Utility).clicked {
+        actions.push(Action::ToggleClipboard);
+        return;
+    }
+
+    if !st.store.shelf.clipboard.is_empty() {
+        let clear_w = 68.0;
+        let clear_r = Rect::new(back_r.x - clear_w - 6.0, y0 - 4.0, clear_w, 24.0);
+        if ui.pill(wid("shelf.clip_clear"), clear_r, "Hapus", Some(Icon::Trash), PillStyle::Utility).clicked {
+            actions.push(Action::ClearClipboard);
+        }
+    }
+
+    // Snippets List
+    let list_y = y0 + 38.0;
+    if st.store.shelf.clipboard.is_empty() {
+        let empty_r = Rect::new(x0, list_y, w, 80.0);
+        super::card::fill_box(ui, None, empty_r, 12.0, palette::SURFACE);
+        ui.c.text(
+            "Belum ada riwayat clipboard. Setiap teks yang disalin (Ctrl+C) akan muncul di sini.",
+            Rect::new(empty_r.x + 16.0, empty_r.y + 28.0, empty_r.w - 32.0, 24.0),
+            &TextStyle::footnote().color(palette::TEXT_DIM).center(),
+        );
+    } else {
+        let row_h = 32.0;
+        let gap = 5.0;
+        let max_visible = 3;
+        for (i, snippet) in st.store.shelf.clipboard.iter().take(max_visible).enumerate() {
+            let ry = list_y + (row_h + gap) * i as f32;
+            let row_r = Rect::new(x0, ry, w, row_h);
+            super::card::fill_box(ui, None, row_r, 8.0, palette::SURFACE);
+
+            // Icon
+            ui.c.icon(Icon::Notes, Rect::new(row_r.x + 8.0, row_r.y + 8.0, 16.0, 16.0), palette::TEXT_DIM);
+
+            // Text preview
+            let clean_preview: String = snippet.text.lines().next().unwrap_or(&snippet.text).trim().chars().take(55).collect();
+            let preview_display = if clean_preview.len() < snippet.text.len() {
+                format!("{clean_preview}…")
+            } else {
+                clean_preview
+            };
+
+            let text_x = row_r.x + 30.0;
+            let action_w = 94.0;
+            let text_w = (row_r.w - 30.0 - action_w - 10.0).max(80.0);
+            ui.c.text(&preview_display, Rect::new(text_x, row_r.y + 7.0, text_w, 18.0), &TextStyle::footnote().weight(Weight::Medium));
+
+            // Copy pill button
+            let copy_btn_w = 54.0;
+            let copy_r = Rect::new(row_r.right() - action_w + 6.0, row_r.y + 4.0, copy_btn_w, 24.0);
+            if ui.pill(wid_n("shelf.clip_copy", snippet.id), copy_r, "Salin", None, PillStyle::Primary(st.accent)).clicked {
+                actions.push(Action::CopySnippet(snippet.text.clone()));
+            }
+
+            // Remove snippet button
+            let del_r = Rect::new(row_r.right() - 28.0, row_r.y + 4.0, 24.0, 24.0);
+            let del_resp = ui.button(wid_n("shelf.clip_del", snippet.id), del_r);
+            let del_col = if del_resp.hovered { palette::RED } else { palette::TEXT_FAINT };
+            if del_resp.hovered {
+                ui.c.fill_circle(del_r.center(), 10.0, Color::white(0.08));
+            }
+            ui.c.icon(Icon::Close, Rect::from_center(del_r.center(), 11.0, 11.0), del_col);
+            if del_resp.clicked {
+                actions.push(Action::RemoveSnippet(snippet.id));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- empty state
 
 fn draw_empty(ui: &mut Ui, st: &AppState, l: &Local, area: Rect, card: Option<(Rect, f32)>, actions: &mut Vec<Action>) {
@@ -577,6 +697,14 @@ fn draw_empty(ui: &mut Ui, st: &AppState, l: &Local, area: Rect, card: Option<(R
     let fill = Color::lerp(Color::white(0.03), accent.with_alpha(0.10), g);
     let stroke = Color::lerp(Color::white(0.12), accent.with_alpha(0.9), g);
     drop_zone(ui, card, zone, 18.0, fill, stroke);
+
+    if g < 0.2 {
+        let clip_w = ui.pill_width("Clipboard", true, true);
+        let clip_r = Rect::new(zone.right() - clip_w - 8.0, zone.y + 8.0, clip_w, PILL_SMALL);
+        if ui.pill(wid("shelf.empty_clip"), clip_r, "Clipboard", Some(Icon::Notes), PillStyle::Utility).clicked {
+            actions.push(Action::ToggleClipboard);
+        }
+    }
 
     let undo_live = g < 0.5 && l.undo.as_ref().is_some_and(|(_, t)| st.now - t < UNDO_SECS);
     let (icon, title, hint) = if g >= 0.5 {
