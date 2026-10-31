@@ -36,6 +36,7 @@ pub mod secret;
 pub mod sound;
 pub mod notifications;
 pub mod stocks;
+pub mod crypto;
 pub mod sysmon;
 pub mod sysstats;
 pub mod update;
@@ -60,6 +61,8 @@ pub struct Services {
     addons: Option<addons::AddonService>,
     /// Started the first time the Stocks page opens ([`Services::stocks_watch`]).
     stocks: std::cell::OnceCell<Option<stocks::StocksService>>,
+    /// Started the first time the Crypto page opens ([`Services::crypto_watch`]).
+    crypto: std::cell::OnceCell<Option<crypto::CryptoService>>,
     /// Started at the first download ([`Services::download`]).
     downloader: std::cell::OnceCell<Option<downloader::DownloaderService>>,
     /// Started the first time the AI tab opens or its notices are on
@@ -104,7 +107,7 @@ impl Services {
             .map(|a| a.id)
             .collect();
         let addons = started("add-ons", addons::AddonService::start(sink.clone(), on));
-        Self { media, lyrics, _audio: audio, _bluetooth: bluetooth, fullscreen, oyenza, pairdrop, addons, stocks: std::cell::OnceCell::new(), usage: std::cell::OnceCell::new(), downloader: std::cell::OnceCell::new(), sink: sink.clone() }
+        Self { media, lyrics, _audio: audio, _bluetooth: bluetooth, fullscreen, oyenza, pairdrop, addons, stocks: std::cell::OnceCell::new(), crypto: std::cell::OnceCell::new(), usage: std::cell::OnceCell::new(), downloader: std::cell::OnceCell::new(), sink: sink.clone() }
     }
 
     pub fn stop(self, _helper: HWND) {
@@ -127,6 +130,17 @@ impl Services {
         }
         if let Some(s) = self.stocks.get_or_init(|| started("stocks", stocks::StocksService::start(self.sink.clone()))) {
             s.set_watch(w);
+        }
+    }
+
+    /// What the Crypto page wants (`pages::crypto::watch`). Its thread starts
+    /// the first time the page opens and sleeps whenever it is closed.
+    pub fn crypto_watch(&self, w: crypto::Watch) {
+        if !w.open && self.crypto.get().is_none() {
+            return;
+        }
+        if let Some(s) = self.crypto.get_or_init(|| started("crypto", crypto::CryptoService::start(self.sink.clone()))) {
+            s.watch(w);
         }
     }
 

@@ -69,6 +69,9 @@ pub mod update;
 // And the Stocks page's prices from oyenza.trade.
 #[path = "../services/stocks.rs"]
 pub mod stocks;
+// And the Crypto page's prices from Binance.
+#[path = "../services/crypto.rs"]
+pub mod crypto;
 // And the AI tab's worker (`studio_usage` does the reading).
 #[path = "../services/usage.rs"]
 pub mod usage;

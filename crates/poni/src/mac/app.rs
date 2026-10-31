@@ -518,6 +518,10 @@ pub struct App {
     stocks: Option<services::stocks::StocksService>,
     /// The Stocks page was on screen at the last look (`set_stocks_watch`).
     stocks_open: bool,
+    /// The Crypto page's prices: started the first time the page opens.
+    crypto: Option<services::crypto::CryptoService>,
+    /// The Crypto page was on screen at the last look (`set_crypto_watch`).
+    crypto_open: bool,
     /// The AI tab's worker: started the first time the tab opens or its
     /// notices are on (`set_usage_watch`).
     usage: Option<services::usage::UsageService>,
@@ -662,6 +666,8 @@ impl App {
             notes_started: Default::default(),
             stocks: None,
             stocks_open: false,
+            crypto: None,
+            crypto_open: false,
             usage: None,
             usage_watch: services::usage::Watch::default(),
             updater: None,
@@ -1554,6 +1560,7 @@ impl App {
         }
         self.tell_oyenza_activity();
         self.set_stocks_watch();
+        self.set_crypto_watch();
         self.set_usage_watch();
         self.apply_fullscreen();
     }
@@ -1784,6 +1791,7 @@ impl App {
             AppEvent::Located(found) => self.on_located(found),
             AppEvent::Cities { file, got } => pages::prayer::cities_came(&mut self.st, file, got),
             AppEvent::Stocks(ev) => self.st.stocks.apply(ev, self.st.unix),
+            AppEvent::Crypto(ev) => self.st.crypto.apply(ev),
             AppEvent::Usage(ev) => self.on_usage(ev),
             AppEvent::AdzanEnded => self.adzan_ended(),
             AppEvent::Log(s) => pinfo!("{s}"),
@@ -2919,6 +2927,25 @@ impl App {
         }
     }
 
+    fn set_crypto_watch(&mut self) {
+        let away = self.away.0 || self.away.1;
+        let open = self.mode == Mode::Expanded(PageKind::Crypto) && !away;
+        if !open && !self.crypto_open {
+            return;
+        }
+        self.crypto_open = open;
+        let w = pages::crypto::watch(&self.st, open);
+        if self.crypto.is_none() && w.open {
+            match services::crypto::CryptoService::start(self.sink.clone()) {
+                Ok(s) => self.crypto = Some(s),
+                Err(e) => pwarn!("service crypto: unavailable ({e})"),
+            }
+        }
+        if let Some(s) = &self.crypto {
+            s.watch(w);
+        }
+    }
+
     /// The Today page came on screen or went: the worker asks for the day only meanwhile.
     fn set_today_watch(&mut self, on: bool) {
         if on != self.today_watch {
@@ -3395,6 +3422,7 @@ impl App {
             PageKind::System => !self.st.system_on(),
             PageKind::Health => !self.st.health_on(),
             PageKind::Stocks => !self.st.stocks_on(),
+            PageKind::Crypto => !self.st.crypto_on(),
             PageKind::Record => !self.st.record_on(),
             PageKind::Ielts => !self.st.ielts_on(),
             PageKind::Downloads => !self.st.downloader_on(),
@@ -3465,6 +3493,7 @@ impl App {
         self.set_health_shown(self.mode == Mode::Expanded(PageKind::Health));
         self.set_pro_shown(matches!(self.mode, Mode::Expanded(PageKind::Ielts | PageKind::Notes | PageKind::Addons)));
         self.set_stocks_watch();
+        self.set_crypto_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge (below the menu
         // bar for what hangs under a notch).

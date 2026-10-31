@@ -49,6 +49,8 @@ pub struct Store {
     /// The Stocks add-on's list: the stocks after the IHSG, the one shown,
     /// the change pills' choice and the chart's range.
     pub stocks: crate::stocks::Watchlist,
+    /// The Crypto add-on's list: coins, selected coin, show mode and chart range.
+    pub crypto: crate::crypto::CryptoWatchlist,
     /// Oyenza Studio Recorder has written to the island (`recorder::Message`)
     /// at least once, so it reads the Record page's links: Screen recorder
     /// shows from then on. 1.0.0 never writes, and its Record would do nothing.
@@ -67,6 +69,7 @@ impl Default for Store {
             oyenza_noticed: Vec::new(),
             script: crate::script::Script::default(),
             stocks: crate::stocks::Watchlist::default(),
+            crypto: crate::crypto::CryptoWatchlist::default(),
             recorder_island: false,
         }
     }

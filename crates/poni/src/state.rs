@@ -364,6 +364,8 @@ pub struct PageUiState {
     pub peek: poni_core::peek::Peek,
     /// The Stocks page: its scroll, search, edit mode and chart animation.
     pub stocks: crate::pages::stocks::StocksUi,
+    /// The Crypto page: its scroll, search, edit mode and chart animation.
+    pub crypto: crate::pages::crypto::CryptoUi,
     /// The Downloads page: its link field, mode and scroll.
     pub downloads: crate::pages::downloads::DownloadsUi,
     /// The AI tab's own state while it shows (`pages::usage`).
@@ -559,6 +561,39 @@ impl StocksState {
                 self.years.insert(h.code.clone(), h);
             }
             StocksEvent::NoHistory(code) => {
+                if !self.no_year.contains(&code) {
+                    self.no_year.push(code);
+                }
+            }
+        }
+    }
+}
+
+/// The Crypto add-on's prices, kept in memory only (`store.crypto` is the list).
+#[derive(Clone, Debug, Default)]
+pub struct CryptoState {
+    pub board: Option<poni_core::crypto::CryptoBoard>,
+    pub checked: Option<i64>,
+    pub trouble: Option<crate::services::crypto::Trouble>,
+    pub years: HashMap<String, poni_core::crypto::CryptoHistory>,
+    pub no_year: Vec<String>,
+}
+
+impl CryptoState {
+    pub fn apply(&mut self, ev: crate::services::crypto::CryptoEvent, unix: i64) {
+        use crate::services::crypto::CryptoEvent;
+        match ev {
+            CryptoEvent::Board(b) => {
+                self.board = Some(b);
+                self.checked = Some(unix);
+                self.trouble = None;
+            }
+            CryptoEvent::Failed(why) => self.trouble = Some(why),
+            CryptoEvent::History(h) => {
+                self.no_year.retain(|c| *c != h.code);
+                self.years.insert(h.code.clone(), h);
+            }
+            CryptoEvent::NoHistory(code) => {
                 if !self.no_year.contains(&code) {
                     self.no_year.push(code);
                 }
@@ -824,6 +859,8 @@ pub struct AppState {
     pub recorder: bool,
     /// The Stocks add-on's prices (its list: `store.stocks`).
     pub stocks: StocksState,
+    /// The Crypto add-on's prices (its list: `store.crypto`).
+    pub crypto: CryptoState,
     /// The Downloads page's jobs (`poni_core::downloads`), in memory only.
     pub downloads: poni_core::downloads::Jobs,
     /// This app offers the Downloader: Windows outside the Microsoft Store
@@ -913,6 +950,7 @@ impl AppState {
             script_hidden: None,
             recorder: false,
             stocks: StocksState::default(),
+            crypto: CryptoState::default(),
             downloads: poni_core::downloads::Jobs::default(),
             downloader_offered: false,
             rec: RecView::default(),
@@ -938,6 +976,7 @@ impl AppState {
             PageKind::System => !st.system_on(),
             PageKind::Health => !st.health_on(),
             PageKind::Stocks => !st.stocks_on(),
+            PageKind::Crypto => !st.crypto_on(),
             PageKind::Downloads => !st.downloader_on(),
             PageKind::Record => !st.record_on(),
             PageKind::Notifications => !st.notifications_on(),
@@ -1008,6 +1047,11 @@ impl AppState {
     /// for only while the page is on screen).
     pub fn stocks_on(&self) -> bool {
         self.addon(poni_core::addons::STOCKS.id) == AddonStatus::Ready
+    }
+
+    /// The Crypto add-on is on: the Crypto tab shows.
+    pub fn crypto_on(&self) -> bool {
+        self.addon(poni_core::addons::CRYPTO.id) == AddonStatus::Ready
     }
 
     /// The Downloader add-on is on, with its tools in place, for an account

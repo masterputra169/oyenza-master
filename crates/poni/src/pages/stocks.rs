@@ -99,6 +99,10 @@ pub struct StocksUi {
     /// The list's scroll: where the wheel sent it, and where it shows on its way.
     scroll: f32,
     shown_scroll: f32,
+    /// Mouse drag-scroll on the list: (press_y, scroll_at_press, moved).
+    list_drag: Option<(f32, f32, bool)>,
+    /// Scrollbar drag: (press_y, scroll_at_press).
+    bar_drag: Option<(f32, f32)>,
     /// Each row's shown top in the list, gliding to its place.
     rows: Vec<(String, f32)>,
     /// The picked row's highlight, gliding from row to row.
@@ -203,7 +207,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     if st.ui.stocks.adding {
         search(ui, st, left);
     } else {
-        list(ui, st, left, dt, &mut moving);
+        list(ui, st, left, area, dt, &mut moving);
     }
     ui.c.set_alpha(base);
     detail(ui, st, right);
@@ -229,6 +233,14 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
+fn intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.right().min(b.right());
+    let y1 = a.bottom().min(b.bottom());
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 /// A row's widgets are keyed by its code, so hover and press follow it when
 /// it moves.
 fn code_n(code: &str) -> u64 {
@@ -249,7 +261,7 @@ fn trend_color(t: Trend) -> Color {
 
 // ---------------------------------------------------------------- the list
 
-fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
+fn list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
     let codes = st.store.stocks.codes.clone();
     let n = codes.len() + 1;
     let content_h = n as f32 * ROW_H + ADD_H;
@@ -260,8 +272,55 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
     let (wl, s) = (&mut st.store.stocks, &mut st.ui.stocks);
     let mut save = false;
 
-    let notches = ui.wheel_in(r);
+    let notches = ui.wheel_in(area);
+    if notches != 0.0 {
+        *moving = true;
+    }
     s.scroll = (s.scroll - notches * ROW_H).clamp(0.0, max_scroll);
+
+    // Mouse scrollbar & click-and-drag scrolling when not in edit mode.
+    let bar_hit = Rect::new(r.right() - 8.0, r.y, 8.0, r.h);
+    if max_scroll > 0.0 && !s.editing {
+        if ui.input.just_pressed {
+            if let Some(m) = ui.input.mouse {
+                if bar_hit.contains(m) {
+                    let track_h = (r.h - 8.0).max(1.0);
+                    let frac = ((m.y - (r.y + 4.0)) / track_h).clamp(0.0, 1.0);
+                    s.scroll = (frac * max_scroll).clamp(0.0, max_scroll);
+                    s.shown_scroll = s.scroll;
+                    s.bar_drag = Some((m.y, s.scroll));
+                } else if r.contains(m) {
+                    s.list_drag = Some((m.y, s.scroll, false));
+                }
+            }
+        }
+        if ui.input.down {
+            if let (Some((y0, sc0)), Some(m)) = (s.bar_drag, ui.input.mouse) {
+                let track_h = (r.h - 8.0).max(1.0);
+                let thumb_h = (track_h * (r.h / content_h)).clamp(24.0, track_h);
+                let travel = (track_h - thumb_h).max(1.0);
+                s.scroll = (sc0 + (m.y - y0) / travel * max_scroll).clamp(0.0, max_scroll);
+                s.shown_scroll = s.scroll;
+                ui.input.pressed_id = None;
+            } else if let (Some((y0, sc0, moved)), Some(m)) = (&mut s.list_drag, ui.input.mouse) {
+                let dy = m.y - *y0;
+                if *moved || dy.abs() > 6.0 {
+                    *moved = true;
+                    s.scroll = (*sc0 - dy).clamp(0.0, max_scroll);
+                    s.shown_scroll = s.scroll;
+                    ui.input.pressed_id = None;
+                    ui.input.clicked = None;
+                }
+            }
+        } else {
+            s.bar_drag = None;
+            s.list_drag = None;
+        }
+    } else {
+        s.bar_drag = None;
+        s.list_drag = None;
+    }
+
     s.shown_scroll = glide(s.shown_scroll.clamp(0.0, max_scroll), s.scroll, dt, 0.25, moving);
     s.edit_k = glide(s.edit_k, if s.editing { 1.0 } else { 0.0 }, dt, 0.005, moving);
 
@@ -314,6 +373,7 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
     }
     let span = board.map_or((540, 960), |b| b.span);
     let mut picked = None;
+    let mut picked_y = None;
     let mut removed = None;
     let mut cycle = false;
     // The dragged row draws last, over the others.
@@ -327,15 +387,18 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
     for i in draw_order {
         let (code, y) = (&s.rows[i].0, s.rows[i].1);
         let row = Rect::new(r.x, top + y, r.w, ROW_H);
-        if row.bottom() < r.y || row.y > r.bottom() {
+        if intersect(row, r).is_none() {
             continue;
         }
         let q = board.and_then(|b| b.quote(code));
         let name = q.map(|q| q.name.as_str()).or_else(|| names.and_then(|n| n.name(code))).unwrap_or(if code == INDEX { "IDX Composite" } else { "" });
         let dragged = s.drag.as_ref().is_some_and(|(c, _)| c == code);
-        let act = draw_row(ui, RowView { code, name, q, span, show: wl.show, edit_k: s.edit_k, dragged, picked: *code == wl.pick }, row, card);
+        let act = draw_row(ui, RowView { code, name, q, span, show: wl.show, edit_k: s.edit_k, dragged, picked: *code == wl.pick }, row, r, card);
         match act {
-            RowAct::Pick => picked = Some(code.clone()),
+            RowAct::Pick => {
+                picked = Some(code.clone());
+                picked_y = Some(y);
+            }
             RowAct::Cycle => cycle = true,
             RowAct::Remove => removed = Some(code.clone()),
             RowAct::Drag => {
@@ -356,32 +419,38 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
     let ew = ui.c.measure(edit_label, &edit_st, 100.0).0.ceil();
     let edit_r = Rect::new(line.right() - ew - 8.0, line.y - 3.0, ew + 16.0, line.h + 6.0);
     let mut start_add = false;
-    if wl.full() {
-        ui.c.text("Your list is full: 10 stocks", line, &TextStyle::footnote().color(palette::TEXT_FAINT));
-    } else if !s.editing {
-        let add_r = Rect::new(add.x, line.y - 3.0, (edit_r.x - add.x - 8.0).max(0.0), line.h + 6.0);
-        let resp = ui.button(wid("stocks.add"), add_r);
-        if resp.hovered || resp.pressed {
-            super::card::fill_box(ui, card, add_r, 9.0, Color::white(if resp.pressed { 0.10 } else { 0.06 }));
+    if intersect(add, r).is_some() {
+        if wl.full() {
+            ui.c.text("Your list is full: 10 stocks", line, &TextStyle::footnote().color(palette::TEXT_FAINT));
+        } else if !s.editing {
+            let add_r = Rect::new(add.x, line.y - 3.0, (edit_r.x - add.x - 8.0).max(0.0), line.h + 6.0);
+            if let Some(add_hit) = intersect(add_r, r) {
+                let resp = ui.button(wid("stocks.add"), add_hit);
+                if resp.hovered || resp.pressed {
+                    super::card::fill_box(ui, card, add_r, 9.0, Color::white(if resp.pressed { 0.10 } else { 0.06 }));
+                }
+                start_add = resp.clicked;
+            }
+            let cy = line.center().y;
+            ui.c.fill_circle(Point::new(line.x + 9.0, cy), 9.0, accent.with_alpha(0.20));
+            ui.c.icon(Icon::Plus, Rect::from_center(Point::new(line.x + 9.0, cy), 13.0, 13.0), accent);
+            ui.c.text("Add a stock", Rect::new(line.x + 26.0, line.y, line.w - 26.0 - ew - 20.0, line.h), &TextStyle::body().weight(Weight::Semibold).color(accent));
         }
-        let cy = line.center().y;
-        ui.c.fill_circle(Point::new(line.x + 9.0, cy), 9.0, accent.with_alpha(0.20));
-        ui.c.icon(Icon::Plus, Rect::from_center(Point::new(line.x + 9.0, cy), 13.0, 13.0), accent);
-        ui.c.text("Add a stock", Rect::new(line.x + 26.0, line.y, line.w - 26.0 - ew - 20.0, line.h), &TextStyle::body().weight(Weight::Semibold).color(accent));
-        start_add = resp.clicked;
-    }
-    if !wl.codes.is_empty() || s.editing {
-        let resp = ui.button(wid("stocks.edit"), edit_r);
-        let c = if resp.hovered { palette::TEXT } else { palette::TEXT_DIM };
-        ui.c.text(edit_label, Rect::new(edit_r.x, line.y, edit_r.w - 8.0, line.h), &edit_st.color(c));
-        if resp.clicked {
-            s.editing = !s.editing;
-            s.drag = None;
-            save |= !s.editing;
+        if !wl.codes.is_empty() || s.editing {
+            if let Some(edit_hit) = intersect(edit_r, r) {
+                let resp = ui.button(wid("stocks.edit"), edit_hit);
+                let c = if resp.hovered { palette::TEXT } else { palette::TEXT_DIM };
+                ui.c.text(edit_label, Rect::new(edit_r.x, line.y, edit_r.w - 8.0, line.h), &edit_st.color(c));
+                if resp.clicked {
+                    s.editing = !s.editing;
+                    s.drag = None;
+                    save |= !s.editing;
+                }
+            }
         }
+        let credit = "Prices from oyenza.trade, 10 min behind IDX";
+        ui.c.text(credit, Rect::new(line.x, add.y + 28.0, line.w, 14.0), &TextStyle::caption().color(palette::TEXT_FAINT));
     }
-    let credit = "Prices from oyenza.trade, 10 min behind IDX";
-    ui.c.text(credit, Rect::new(line.x, add.y + 28.0, line.w, 14.0), &TextStyle::caption().color(palette::TEXT_FAINT));
 
     // The list fades out at an edge that scrolls further.
     if s.shown_scroll > 0.5 {
@@ -390,10 +459,28 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, dt: f32, moving: &mut bool) {
     if s.shown_scroll < max_scroll - 0.5 {
         fade(ui, Rect::new(r.x - 8.0, r.bottom() - 18.0, r.w + 16.0, 18.0), false);
     }
+    // Interactive scrollbar thumb on hover/drag.
+    if max_scroll > 0.5 && !s.still && (ui.hovered(r) || s.bar_drag.is_some()) {
+        let track_h = (r.h - 8.0).max(1.0);
+        let thumb_h = (track_h * (r.h / content_h)).clamp(24.0, track_h);
+        let thumb_y = r.y + 4.0 + (s.shown_scroll / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
+        let active = ui.hovered(bar_hit) || s.bar_drag.is_some();
+        let w = if active { 4.0 } else { 2.5 };
+        ui.c.fill_rrect(Rect::new(r.right() - w - 1.0, thumb_y, w, thumb_h), w / 2.0, Color::white(if active { 0.42 } else { 0.22 }));
+    }
     ui.c.unclip();
 
     if let Some(code) = picked {
         wl.pick = code;
+        if let Some(py) = picked_y {
+            if py < s.scroll {
+                s.scroll = py.clamp(0.0, max_scroll);
+                *moving = true;
+            } else if py + ROW_H > s.scroll + r.h {
+                s.scroll = (py + ROW_H - r.h + 18.0).clamp(0.0, max_scroll);
+                *moving = true;
+            }
+        }
         save = true;
     }
     if cycle {
@@ -440,13 +527,14 @@ enum RowAct {
 
 /// One row of the list: code and name, the day's line, the price and its
 /// change pill; in edit mode a remove button and a handle instead.
-fn draw_row(ui: &mut Ui, v: RowView, r: Rect, card: Option<(Rect, f32)>) -> RowAct {
+fn draw_row(ui: &mut Ui, v: RowView, r: Rect, view: Rect, card: Option<(Rect, f32)>) -> RowAct {
     let n = code_n(v.code);
     let index = v.code == INDEX;
     let editing = v.edit_k > 0.01;
     let mut act = RowAct::None;
     let hit = Rect::new(r.x, r.y + 2.0, r.w, r.h - 4.0);
-    let resp = ui.button(wid_n("stocks.row", n), hit);
+    let Some(hit_clip) = intersect(hit, view) else { return act };
+    let resp = ui.button(wid_n("stocks.row", n), hit_clip);
     if v.dragged {
         super::card::fill_box(ui, card, hit, 10.0, Color::white(0.14));
     } else if (resp.hovered || resp.pressed) && !v.picked && !editing {
@@ -474,17 +562,19 @@ fn draw_row(ui: &mut Ui, v: RowView, r: Rect, card: Option<(Rect, f32)>) -> RowA
                 mini_chart(ui, q, v.span, spark);
                 let price = stocks::fmt_price(q.price, index);
                 ui.c.text(&price, Rect::new(right - 110.0, r.y + 5.0, 110.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
-                let pr = ui.button(wid_n("stocks.pill", n), pill);
                 let mut fill = trend_color(q.trend());
-                if pr.pressed {
-                    fill = fill.mul_alpha(0.75);
+                if let Some(pill_clip) = intersect(pill, view) {
+                    let pr = ui.button(wid_n("stocks.pill", n), pill_clip);
+                    if pr.pressed {
+                        fill = fill.mul_alpha(0.75);
+                    }
+                    if pr.clicked && !editing {
+                        act = RowAct::Cycle;
+                    }
                 }
                 ui.c.fill_rrect(pill, 6.0, fill);
                 let label = q.pill(v.show);
                 ui.c.text(&label, Rect::new(pill.x + 6.0, pill.y, pill.w - 12.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
-                if pr.clicked && !editing {
-                    act = RowAct::Cycle;
-                }
             }
             None => {
                 ui.c.text("\u{2014}", Rect::new(right - 80.0, r.y + 5.0, 80.0, 19.0), &TextStyle::body().color(palette::TEXT_FAINT).right());
@@ -497,7 +587,8 @@ fn draw_row(ui: &mut Ui, v: RowView, r: Rect, card: Option<(Rect, f32)>) -> RowA
         ui.c.set_alpha(base * v.edit_k);
         // Remove: a red disc with a white bar, in the room the text left.
         let c = Point::new(r.x + ROW_PAD + 9.0, r.center().y);
-        let rm = ui.button(wid_n("stocks.remove", n), Rect::from_center(c, 26.0, 26.0));
+        let rm_hit = intersect(Rect::from_center(c, 26.0, 26.0), view);
+        let rm = rm_hit.map(|rh| ui.button(wid_n("stocks.remove", n), rh)).unwrap_or_default();
         ui.c.fill_circle(c, 9.0, if rm.pressed { palette::RED.mul_alpha(0.7) } else { palette::RED });
         ui.c.fill_rrect(Rect::from_center(c, 9.0, 2.0), 1.0, Color::white(1.0));
         if rm.clicked {
@@ -505,7 +596,7 @@ fn draw_row(ui: &mut Ui, v: RowView, r: Rect, card: Option<(Rect, f32)>) -> RowA
         }
         // The handle: three bars to drag the row by.
         let h = Rect::new(right - 36.0, r.y + 4.0, 36.0, r.h - 8.0);
-        let hr = ui.button(handle_id(v.code), h);
+        let hr = intersect(h, view).map(|hh| ui.button(handle_id(v.code), hh)).unwrap_or_default();
         let hc = if hr.hovered || hr.pressed || v.dragged { palette::TEXT } else { palette::TEXT_FAINT };
         for j in 0..3 {
             ui.c.fill_rrect(Rect::new(h.right() - 22.0, h.center().y - 5.0 + j as f32 * 5.0 - 0.75, 16.0, 1.5), 0.75, hc);

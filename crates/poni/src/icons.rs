@@ -90,6 +90,8 @@ pub enum Icon {
     Record,
     /// The Stocks tab: a line climbing to the right, its arrowhead at the end.
     Stocks,
+    /// The Crypto tab: a cryptocurrency coin.
+    Crypto,
     /// A magnifying glass: the Stocks page's search.
     Search,
     /// The Record tab: a ring with the record dot inside.
@@ -348,6 +350,11 @@ pub fn parts(icon: Icon) -> &'static [Part] {
         Mic => p![s("M9 6a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0z"), s("M5.5 11a6.5 6.5 0 0 0 13 0"), s("M12 17.5V21")],
         Download => p![s("M12 4v10.5"), s("M7.5 10L12 14.5 16.5 10"), s("M4.5 16v2.5A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5V16")],
         Stocks => p![s("M3.5 17.5l5.5-5.5 4 4 7.5-7.5"), s("M15 8.5h5.5V14")],
+        Crypto => p![
+            s("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"),
+            s("M9.5 7.5h3.2a2 2 0 0 1 1.8 2.8 2.2 2.2 0 0 1-1.8 3.7H9.5V7.5zm0 3.7h3.5"),
+            s("M11 5.5v2m0 11v2m2-15v2m0 11v2"),
+        ],
         Search => p![s("M4.5 10.5a6 6 0 1 0 12 0a6 6 0 1 0-12 0"), s("M15 15l4.5 4.5")],
         Bell => p![s("M6 11a6 6 0 0 1 12 0v4.2l1.6 2.3H4.4L6 15.2z"), s("M10 20.3a2.2 2.2 0 0 0 4 0")],
         Notes => p![
@@ -483,7 +490,7 @@ mod tests {
         Icon::Sliders, Icon::Open, Icon::Phone, Icon::Eye, Icon::MoneyIn, Icon::MoneyOut, Icon::Transfer, Icon::Card, Icon::Wallet,
         Icon::Unlink, Icon::Gear,
         Icon::Gauge, Icon::App, Icon::Windows, Icon::Addons, Icon::Moon, Icon::Stop, Icon::Script, Icon::Record, Icon::Download,
-        Icon::Stocks, Icon::Search,
+        Icon::Stocks, Icon::Crypto, Icon::Search,
         Icon::Recorder, Icon::Screen, Icon::AppWindow, Icon::Area, Icon::Camera, Icon::Mic, Icon::Bell, Icon::Notes, Icon::Message,
         Icon::Ai, Icon::OpenAi, Icon::Claude, Icon::OpenCode, Icon::Gemini, Icon::Cursor, Icon::Copilot, Icon::Kimi, Icon::Zai,
         Icon::MiniMax, Icon::OpenRouter, Icon::Oyenza,

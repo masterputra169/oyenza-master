@@ -340,12 +340,89 @@ impl Worker {
                 self.failed(Trouble::Server, None)
             }
             Err(_) => {
-                self.note("oyenza.trade can't be reached");
-                self.failed(Trouble::Offline, None)
+                if let Some(b) = self.ask_yahoo_board(codes) {
+                    self.fails = 0;
+                    self.every_s = Some(b.every_s);
+                    self.tag = Some(b.tag.clone()).filter(|t| !t.is_empty());
+                    self.note("prices coming in (Yahoo Finance fallback)");
+                    self.send(StocksEvent::Board(b));
+                    None
+                } else {
+                    self.note("oyenza.trade can't be reached");
+                    self.failed(Trouble::Offline, None)
+                }
             }
         };
         let wait = next.unwrap_or_else(|| Duration::from_secs(stocks::next_ask(self.every_s, self.fails)));
         self.next_board = Instant::now() + wait;
+    }
+
+    /// Fallback to Yahoo Finance (`^JKSE` and `<CODE>.JK`) when `oyenza.trade` is unreachable.
+    fn ask_yahoo_board(&mut self, codes: &[String]) -> Option<Board> {
+        let mut rows = Vec::new();
+        let mut missing = Vec::new();
+        let mut latest_t: i64 = 0;
+        let mut trading_open = false;
+
+        let all_codes: Vec<String> = std::iter::once(stocks::INDEX.to_string()).chain(codes.iter().cloned()).collect();
+        for code in &all_codes {
+            let ysym = if code == stocks::INDEX { "%5EJKSE".to_string() } else { format!("{code}.JK") };
+            let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{ysym}?interval=5m&range=1d");
+            let Ok(r) = self.get(&url, None) else { continue };
+            if r.status != 200 {
+                if code != stocks::INDEX {
+                    missing.push(code.clone());
+                }
+                continue;
+            }
+            if let Some((q, mtime, is_open)) = parse_yahoo_quote(code, &r.body) {
+                if mtime > latest_t {
+                    latest_t = mtime;
+                }
+                trading_open |= is_open;
+                rows.push(q);
+            } else if code != stocks::INDEX {
+                missing.push(code.clone());
+            }
+        }
+
+        if rows.is_empty() {
+            return None;
+        }
+        let now_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(latest_t, |d| d.as_secs() as i64);
+        let ref_t = if latest_t > 0 { latest_t } else { now_unix };
+        let wib_days = (ref_t + 7 * 3600).div_euclid(86_400);
+        let (y, m, d) = poni_core::datetime::civil_from_days(wib_days);
+        let day = format!("{y:04}-{m:02}-{d:02}");
+        let phase = if trading_open && (now_unix - ref_t).abs() < 1800 {
+            stocks::Phase::Open
+        } else {
+            stocks::Phase::Closed
+        };
+        let every_s = if phase.trading() { 30 } else { 120 };
+        Some(Board {
+            tag: format!("yf-{ref_t}"),
+            at: now_unix,
+            t: ref_t,
+            day,
+            phase,
+            delay_s: 600,
+            every_s,
+            stale: false,
+            span: (540, 960),
+            rows,
+            missing,
+        })
+    }
+
+    fn ask_yahoo_year(&mut self, code: &str) -> Option<History> {
+        let ysym = if code == stocks::INDEX { "%5EJKSE".to_string() } else { format!("{code}.JK") };
+        let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{ysym}?interval=1d&range=1y");
+        let r = self.get(&url, None).ok()?;
+        if r.status != 200 {
+            return None;
+        }
+        parse_yahoo_history(code, &r.body)
     }
 
     /// A failed ask: tell the page, back off. `retry_after_s`: the server's own wait.
@@ -369,7 +446,16 @@ impl Worker {
                 }
             }
             Ok(r) => crate::pwarn!("stocks: names: HTTP {}", r.status),
-            Err(e) => crate::pwarn!("stocks: names: {e}"),
+            Err(e) => {
+                crate::pwarn!("stocks: names: {e}");
+                #[cfg(not(test))]
+                {
+                    let n = Arc::new(fallback_idx_names());
+                    self.names = Some(n.clone());
+                    self.send(StocksEvent::Names(n));
+                    return;
+                }
+            }
         }
         self.next_names = Instant::now() + RETRY_GAP;
         self.send(StocksEvent::NoNames);
@@ -391,11 +477,228 @@ impl Worker {
                 self.years.insert(code.to_string(), false);
             }
             Ok(r) => crate::pwarn!("stocks: chart {code}: HTTP {}", r.status),
-            Err(e) => crate::pwarn!("stocks: chart {code}: {e}"),
+            Err(e) => {
+                if let Some(h) = self.ask_yahoo_year(code) {
+                    self.years.insert(code.to_string(), true);
+                    self.send(StocksEvent::History(h));
+                    return;
+                }
+                crate::pwarn!("stocks: chart {code}: {e}");
+            }
         }
         self.next_year.insert(code.to_string(), Instant::now() + RETRY_GAP);
         self.send(StocksEvent::NoHistory(code.to_string()));
     }
+}
+
+fn idx_short_name(code: &str, raw: &str) -> String {
+    for (c, n) in fallback_idx_list() {
+        if *c == code {
+            return (*n).to_string();
+        }
+    }
+    let cleaned = raw
+        .trim_start_matches("PT ")
+        .trim_end_matches(" Tbk.")
+        .trim_end_matches(" Tbk")
+        .trim_end_matches(" (Persero)")
+        .trim();
+    if cleaned.is_empty() {
+        code.to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn idx_shares_approx(code: &str) -> Option<f64> {
+    match code {
+        "BBCA" => Some(123.275e9),
+        "BBRI" => Some(151.559e9),
+        "BMRI" => Some(93.333e9),
+        "BBNI" => Some(37.297e9),
+        "TLKM" => Some(99.062e9),
+        "ASII" => Some(40.483e9),
+        "BYAN" => Some(33.333e9),
+        "BREN" => Some(133.786e9),
+        "AMMN" => Some(72.518e9),
+        "TPIA" => Some(86.511e9),
+        "GOTO" => Some(1191.0e9),
+        "UNVR" => Some(38.150e9),
+        "ICBP" => Some(11.662e9),
+        "ADRO" => Some(30.758e9),
+        "ANTM" => Some(24.030e9),
+        "BRIS" => Some(46.129e9),
+        _ => None,
+    }
+}
+
+fn fallback_idx_list() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("ACES", "Aspirasi Hidup Indonesia"),
+        ("ADRO", "Alamtri Resources"),
+        ("AKRA", "AKR Corporindo"),
+        ("AMMN", "Amman Mineral"),
+        ("AMRT", "Sumber Alfaria Trijaya"),
+        ("ANTM", "Antam"),
+        ("ARTO", "Bank Jago"),
+        ("ASII", "Astra"),
+        ("BBCA", "Bank BCA"),
+        ("BBNI", "Bank BNI"),
+        ("BBRI", "Bank BRI"),
+        ("BBTN", "Bank BTN"),
+        ("BMRI", "Bank Mandiri"),
+        ("BREN", "Barito Renewables"),
+        ("BRIS", "Bank Syariah Indonesia"),
+        ("BRPT", "Barito Pacific"),
+        ("BUKA", "Bukalapak"),
+        ("BYAN", "Bayan Resources"),
+        ("CPIN", "Charoen Pokphand"),
+        ("CTRA", "Ciputra Development"),
+        ("EXCL", "XL Axiata"),
+        ("GOTO", "GoTo Gojek Tokopedia"),
+        ("ICBP", "Indofood CBP"),
+        ("INCO", "Vale Indonesia"),
+        ("INDF", "Indofood"),
+        ("INKP", "Indah Kiat Pulp & Paper"),
+        ("ISAT", "Indosat Ooredoo Hutchison"),
+        ("ITMG", "Indo Tambangraya Megah"),
+        ("JPFA", "Japfa Comfeed"),
+        ("JSMR", "Jasa Marga"),
+        ("KLBF", "Kalbe Farma"),
+        ("MAPI", "Mitra Adiperkasa"),
+        ("MBMA", "Merdeka Battery Materials"),
+        ("MDKA", "Merdeka Copper Gold"),
+        ("MEDC", "Medco Energi"),
+        ("MTEL", "Dayamitra Telekomunikasi"),
+        ("MYOR", "Mayora Indah"),
+        ("PGAS", "Perusahaan Gas Negara"),
+        ("PGEO", "Pertamina Geothermal"),
+        ("PTBA", "Bukit Asam"),
+        ("PWON", "Pakuwon Jati"),
+        ("SMGR", "Semen Indonesia"),
+        ("SMRA", "Summarecon Agung"),
+        ("TLKM", "Telkom"),
+        ("TOWR", "Sarana Menara Nusantara"),
+        ("TPIA", "Chandra Asri Pacific"),
+        ("UNTR", "United Tractors"),
+        ("UNVR", "Unilever Indonesia"),
+    ]
+}
+
+#[cfg(not(test))]
+fn fallback_idx_names() -> Names {
+    Names {
+        tag: "fallback".into(),
+        list: fallback_idx_list().iter().map(|(c, n)| ((*c).to_string(), (*n).to_string())).collect(),
+    }
+}
+
+fn parse_yahoo_quote(code: &str, body: &str) -> Option<( stocks::Quote, i64, bool )> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let res = v.get("chart")?.get("result")?.as_array()?.first()?;
+    let meta = res.get("meta")?;
+    let price = meta.get("regularMarketPrice")?.as_f64().filter(|x| x.is_finite() && *x > 0.0)?;
+    let prev = meta
+        .get("chartPreviousClose")
+        .or_else(|| meta.get("previousClose"))
+        .and_then(|x| x.as_f64())
+        .filter(|x| x.is_finite() && *x > 0.0)
+        .unwrap_or(price);
+    let high = meta.get("regularMarketDayHigh").and_then(|x| x.as_f64()).filter(|x| x.is_finite() && *x > 0.0);
+    let low = meta.get("regularMarketDayLow").and_then(|x| x.as_f64()).filter(|x| x.is_finite() && *x > 0.0);
+    let vol = meta.get("regularMarketVolume").and_then(|x| x.as_f64()).filter(|x| x.is_finite() && *x > 0.0);
+    let w52_hi = meta.get("fiftyTwoWeekHigh").and_then(|x| x.as_f64()).filter(|x| x.is_finite() && *x > 0.0);
+    let w52_lo = meta.get("fiftyTwoWeekLow").and_then(|x| x.as_f64()).filter(|x| x.is_finite() && *x > 0.0);
+    let w52 = w52_lo.zip(w52_hi);
+    let mtime = meta.get("regularMarketTime").and_then(|x| x.as_i64()).unwrap_or(0);
+    let raw_name = meta.get("shortName").or_else(|| meta.get("longName")).and_then(|x| x.as_str()).unwrap_or("");
+    let name = if code == stocks::INDEX {
+        "IDX Composite".to_string()
+    } else {
+        idx_short_name(code, raw_name)
+    };
+
+    let mut spark = Vec::new();
+    let mut open_val = None;
+    if let (Some(ts_arr), Some(q_obj)) = (
+        res.get("timestamp").and_then(|t| t.as_array()),
+        res.get("indicators").and_then(|i| i.get("quote")).and_then(|q| q.as_array()).and_then(|a| a.first()),
+    ) {
+        if let Some(opens) = q_obj.get("open").and_then(|o| o.as_array()) {
+            open_val = opens.iter().find_map(|x| x.as_f64().filter(|v| v.is_finite() && *v > 0.0));
+        }
+        if let Some(closes) = q_obj.get("close").and_then(|c| c.as_array()) {
+            for (t_val, c_val) in ts_arr.iter().zip(closes.iter()) {
+                if let (Some(ts), Some(c)) = (t_val.as_i64(), c_val.as_f64().filter(|v| v.is_finite() && *v > 0.0)) {
+                    let minute = (((ts + 7 * 3600).rem_euclid(86_400)) / 60).clamp(0, 1439) as u16;
+                    spark.push((minute, c));
+                }
+            }
+        }
+    }
+    spark.sort_by_key(|p| p.0);
+    spark.dedup_by_key(|p| p.0);
+    if let Some(last) = spark.last_mut() {
+        last.1 = price;
+    } else {
+        spark.push((540, prev));
+        spark.push((960, price));
+    }
+
+    let index = code == stocks::INDEX;
+    let mcap = if index { None } else { idx_shares_approx(code).map(|sh| sh * price) };
+    let value = if index { None } else { vol.map(|v| v * price) };
+    let reg = meta.get("currentTradingPeriod").and_then(|p| p.get("regular"));
+    let is_open = match (reg.and_then(|r| r.get("start")).and_then(|s| s.as_i64()), reg.and_then(|r| r.get("end")).and_then(|e| e.as_i64())) {
+        (Some(s), Some(e)) => mtime >= s && mtime < e,
+        _ => false,
+    };
+
+    Some((
+        stocks::Quote {
+            code: code.to_string(),
+            name,
+            price,
+            prev,
+            open: open_val.or(Some(prev)),
+            high,
+            low,
+            volume: if index { None } else { vol },
+            value,
+            w52,
+            mcap,
+            spark,
+        },
+        mtime,
+        is_open,
+    ))
+}
+
+fn parse_yahoo_history(code: &str, body: &str) -> Option<History> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let res = v.get("chart")?.get("result")?.as_array()?.first()?;
+    let ts_arr = res.get("timestamp")?.as_array()?;
+    let closes_arr = res.get("indicators")?.get("quote")?.as_array()?.first()?.get("close")?.as_array()?;
+    let mut pts: Vec<(i64, f64)> = ts_arr
+        .iter()
+        .zip(closes_arr.iter())
+        .filter_map(|(t, c)| {
+            let ts = t.as_i64()?;
+            let close = c.as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+            let day = (ts + 7 * 3600).div_euclid(86_400);
+            Some((day, close))
+        })
+        .collect();
+    pts.sort_by_key(|p| p.0);
+    pts.dedup_by_key(|p| p.0);
+    if pts.len() < 2 {
+        return None;
+    }
+    Some(History {
+        code: code.to_string(),
+        days: pts.iter().map(|p| p.0).collect(),
+        closes: pts.iter().map(|p| p.1).collect(),
+    })
 }
 
 #[cfg(test)]

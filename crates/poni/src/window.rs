@@ -32,6 +32,14 @@ unsafe extern "system" fn visual_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
         // WS_EX_TRANSPARENT already keeps hit tests off it; should one land
         // here anyway, it goes on to the island underneath (same thread).
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        // Forward mouse wheel events that land on the visual window to the island.
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            let island = ISLAND.with(|i| i.get());
+            if island != 0 {
+                return SendMessageW(HWND(island as *mut core::ffi::c_void), msg, wp, lp);
+            }
+            LRESULT(0)
+        }
         // The renderer places and sizes it; moving to another display must
         // not resize it.
         WM_DPICHANGED => LRESULT(0),
@@ -129,6 +137,7 @@ pub fn create_visual_window(island: HWND) -> Result<HWND> {
             None,
         )?
     };
+    ISLAND.with(|i| i.set(island.0 as isize));
     VISUAL.with(|v| v.set(visual.0 as isize));
     // It holds the pixels: out of capture too while an owner wants the island out.
     if CAPTURE.with(|c| c.get().1) {
@@ -154,8 +163,55 @@ pub enum CaptureOwner {
 thread_local! {
     // (owners that want it, what Windows was last told). UI thread only.
     static CAPTURE: std::cell::Cell<(u8, bool)> = const { std::cell::Cell::new((0, false)) };
-    // The visual window, once the GPU renderer made it (0 before).
+    // The island window and its visual window (0 before).
+    static ISLAND: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
     static VISUAL: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    // Low-level mouse wheel hook, active ONLY while the island is expanded and hovered.
+    static WHEEL_HOOK: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    static WHEEL_RECT: std::cell::Cell<RECT> = const { std::cell::Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
+}
+
+unsafe extern "system" fn wheel_hook_proc(code: i32, wp: WPARAM, lp: LPARAM) -> windows::Win32::Foundation::LRESULT {
+    if code >= 0 && wp.0 as u32 == WM_MOUSEWHEEL && lp.0 != 0 {
+        let ms = &*(lp.0 as *const MSLLHOOKSTRUCT);
+        let r = WHEEL_RECT.with(|c| c.get());
+        if ms.pt.x >= r.left && ms.pt.x < r.right && ms.pt.y >= r.top && ms.pt.y < r.bottom {
+            let island = ISLAND.with(|i| i.get());
+            if island != 0 {
+                let delta_hi = (ms.mouseData >> 16) & 0xffff;
+                if delta_hi != 0 {
+                    let wparam = WPARAM((delta_hi as usize) << 16);
+                    let lparam = LPARAM(((ms.pt.x as i16 as u16 as usize) | ((ms.pt.y as i16 as u16 as usize) << 16)) as isize);
+                    let _ = PostMessageW(HWND(island as *mut core::ffi::c_void), WM_MOUSEWHEEL, wparam, lparam);
+                    return windows::Win32::Foundation::LRESULT(1);
+                }
+            }
+        }
+    }
+    CallNextHookEx(None, code, wp, lp)
+}
+
+/// Route physical mouse-wheel notches to the non-activating island window
+/// while it is expanded and hovered (`active == true`); unhook immediately
+/// when collapsed or when the pointer leaves (`active == false`), so nothing
+/// runs at rest.
+pub fn sync_wheel_hook(hwnd: HWND, active: bool, rect: RECT) {
+    ISLAND.with(|i| i.set(hwnd.0 as isize));
+    WHEEL_RECT.with(|r| r.set(rect));
+    if active {
+        if WHEEL_HOOK.with(|h| h.get()) == 0 {
+            if let Ok(hook) = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(wheel_hook_proc), None, 0) } {
+                WHEEL_HOOK.with(|h| h.set(hook.0 as isize));
+            }
+        }
+    } else {
+        let prev = WHEEL_HOOK.with(|h| h.replace(0));
+        if prev != 0 {
+            unsafe {
+                let _ = UnhookWindowsHookEx(HHOOK(prev as *mut core::ffi::c_void));
+            }
+        }
+    }
 }
 
 /// The visual window, if the GPU renderer made one.

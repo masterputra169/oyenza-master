@@ -41,8 +41,8 @@ DefaultDirName={localappdata}\Programs\{#AppDir}
 DisableDirPage=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 MinVersion=10.0
 OutputDir=..\dist
 OutputBaseFilename=Oyenza-Studio-Setup-{#AppVersion}
@@ -51,9 +51,8 @@ UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 WizardStyle=modern
 ; Oyen hanging from the island on the finish page, Poni's logo in the header (both from tools/make_brand.py).
-; Setup picks the file closest to its image area: 100%, 150% and 200% scaling.
-WizardImageFile=art\wizard-202x386.png,art\wizard-336x643.png,art\wizard-430x824.png
-WizardSmallImageFile=art\wizard-small-58.png,art\wizard-small-77.png,art\wizard-small-97.png,art\wizard-small-116.png,art\wizard-small-124.png,art\wizard-small-143.png,art\wizard-small-159.png
+WizardImageFile=art\nsis-welcome.bmp
+WizardSmallImageFile=art\nsis-header.bmp
 Compression=lzma2/max
 SolidCompression=yes
 ; A running copy is asked to quit in PrepareToInstall; Restart Manager is the safety net.

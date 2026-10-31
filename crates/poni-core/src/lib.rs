@@ -11,6 +11,7 @@ pub mod addons;
 pub mod agenda;
 pub mod applemusic;
 pub mod datetime;
+pub mod crypto;
 pub mod downloads;
 pub mod frames;
 pub mod frametime;

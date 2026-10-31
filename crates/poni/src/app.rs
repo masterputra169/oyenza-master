@@ -63,6 +63,21 @@ const TIMER_RAISE: usize = 9;
 const TIMER_PEEK: usize = 10;
 /// The next read of the update file (`crate::updates`).
 const TIMER_UPDATE: usize = 11;
+/// Smart dodge: while the collapsed island has stepped out of the way of a
+/// pointer over the tab bar (`y > hide_trigger_y()`), its hit mask is cleared
+/// there so clicks go to the app underneath. Because Windows then sends no
+/// mouse messages for that transparent area, this timer checks `GetCursorPos`
+/// every 40 ms (responsive to leaving the tab without waking every frame)
+/// only while the pointer is inside the dodged island's box, and stops as
+/// soon as the pointer leaves, reaches the upper notch, or the session rests.
+const TIMER_DODGE: usize = 12;
+const DODGE_CHECK_MS: u32 = 40;
+/// Latency / jeda waktu (ms) before the island hides when the pointer lingers
+/// in the reduced tab hitbox at the bottom of the collapsed island.
+const TIMER_HIDE_DELAY: usize = 13;
+const HIDE_LATENCY_MS: u32 = 250;
+/// Upward lift (DIPs) as the island fades out when dodging a pointer over tabs.
+const DODGE_LIFT_DIP: f32 = 3.0;
 /// Show over games: how long the readout shows over a game, the least time
 /// between two peeks for a frame-rate drop, and Alt+Shift+F's id.
 const PEEK_S: f64 = 5.0;
@@ -459,6 +474,8 @@ pub struct App {
     oyenza_watch: bool,
     /// The Stocks page was on screen at the last look (`set_stocks_watch`).
     stocks_open: bool,
+    /// The Crypto page was on screen at the last look (`set_crypto_watch`).
+    crypto_open: bool,
     /// The Today page is on screen: the worker asks for the day (`services::oyenza`).
     today_watch: bool,
     /// What the AI tab's worker was last told (`set_usage_watch`).
@@ -519,6 +536,11 @@ pub struct App {
     page_anim: Option<(PageKind, f64, f32)>,
     /// Where the hover (dwell) timer was last armed; None when it isn't.
     hover_arm: Option<Point>,
+    /// Smart dodge: pointer is over the collapsed island below `hide_trigger_y()`,
+    /// so the island fades out and clears its hit mask there for underlying tabs.
+    dodging: bool,
+    /// Opacity of the island for smart dodge (1.0 at rest, 0.0 when dodged).
+    dodge_alpha: f32,
     /// The pointer left the open island: close it on the next frame.
     collapse_due: bool,
     /// When the pointer last closed the island by leaving it.
@@ -687,6 +709,7 @@ impl App {
             sysmon_rest: poni_core::sysmon::Rest::default(),
             oyenza_watch: false,
             stocks_open: false,
+            crypto_open: false,
             today_watch: false,
             usage_watch: services::usage::Watch::default(),
             frames: None,
@@ -719,6 +742,8 @@ impl App {
             outgoing: None,
             page_anim: None,
             hover_arm: None,
+            dodging: false,
+            dodge_alpha: 1.0,
             collapse_due: false,
             left_at: f64::NEG_INFINITY,
             menu_open: false,
@@ -976,8 +1001,27 @@ impl App {
                 self.on_timer(wp.0);
                 Some(LRESULT(0))
             }
+            WM_NCHITTEST => {
+                let sx = (lp.0 & 0xffff) as u16 as i16 as i32;
+                let sy = ((lp.0 >> 16) & 0xffff) as u16 as i16 as i32;
+                let s = self.gfx.scale();
+                let p = Point::new((sx - self.surface.x) as f32 / s, (sy - self.surface.y) as f32 / s);
+                if self.dodging && p.y > self.hide_trigger_y() {
+                    return Some(LRESULT(HTTRANSPARENT as isize));
+                }
+                None
+            }
             WM_MOUSEMOVE => {
                 let p = self.mouse_dip(lp);
+                if self.can_dodge() {
+                    let hy = self.hide_trigger_y();
+                    if p.y <= hy && self.dodging {
+                        self.set_dodging(false);
+                        self.dodge_alpha = 1.0;
+                    } else if self.dodging {
+                        return Some(LRESULT(0));
+                    }
+                }
                 if self.over_stale_mask(p) {
                     // The pointer is over a part of the hit mask the outline
                     // already left: it isn't on the island.
@@ -985,6 +1029,7 @@ impl App {
                         self.hovering = false;
                         self.input.mouse = None;
                         self.cancel_hover();
+                        self.cancel_hide_delay();
                         self.pointer_left();
                         self.request_frame();
                     }
@@ -992,17 +1037,20 @@ impl App {
                 }
                 self.input.mouse = Some(p);
                 if !self.hovering {
-                    self.hovering = true;
-                    self.collapse_due = false;
-                    unsafe {
-                        let mut tme = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
-                        let _ = TrackMouseEvent(&mut tme);
-                        let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
-                    }
-                    if !self.expanded && clock::mono() - self.left_at < REOPEN_S {
-                        // Back onto the island while it is still closing.
-                        self.expand();
+                    self.enter_island_hover(p);
+                } else if self.can_dodge() {
+                    let hy = self.hide_trigger_y();
+                    if p.y > hy {
+                        if self.hover_arm.is_some() {
+                            self.cancel_hover();
+                            self.arm_hide_delay();
+                        }
+                    } else if let Some(p0) = self.hover_arm.filter(|_| !self.expanded) {
+                        if (p.x - p0.x).hypot(p.y - p0.y) > DWELL_SLOP {
+                            self.arm_hover(p);
+                        }
                     } else if !self.expanded {
+                        self.cancel_hide_delay();
                         self.arm_hover(p);
                     }
                 } else if let Some(p0) = self.hover_arm.filter(|_| !self.expanded) {
@@ -1018,13 +1066,18 @@ impl App {
             WM_MOUSELEAVE => {
                 self.hovering = false;
                 self.input.mouse = None;
+                window::sync_wheel_hook(self.hwnd, false, RECT::default());
                 self.cancel_hover();
+                self.cancel_hide_delay();
                 self.pointer_left();
                 self.request_frame();
                 Some(LRESULT(0))
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 let p = self.mouse_dip(lp);
+                if self.dodging && p.y > self.hide_trigger_y() {
+                    return None;
+                }
                 if self.over_shadow(p) {
                     // A press on the floating pill's shadow (software renderer): not the island.
                     return Some(LRESULT(0));
@@ -1132,6 +1185,9 @@ impl App {
             }
             WM_RBUTTONUP => {
                 let p = self.mouse_dip(lp);
+                if self.dodging && p.y > self.hide_trigger_y() {
+                    return None;
+                }
                 if self.over_shadow(p) {
                     return Some(LRESULT(0));
                 }
@@ -1151,6 +1207,19 @@ impl App {
             WM_MOUSEWHEEL => {
                 let delta = ((wp.0 >> 16) & 0xffff) as u16 as i16 as f32 / WHEEL_DELTA as f32;
                 self.input.wheel += delta;
+                let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                if lp.0 == 0 {
+                    unsafe {
+                        let _ = GetCursorPos(&mut pt);
+                    }
+                }
+                if unsafe { windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut pt).as_bool() } {
+                    let s = self.gfx.scale();
+                    let p = Point::new(pt.x as f32 / s, pt.y as f32 / s);
+                    if p.x >= 0.0 && p.y >= 0.0 && p.x <= self.surface.w as f32 / s && p.y <= self.surface.h as f32 / s {
+                        self.input.mouse = Some(p);
+                    }
+                }
                 self.request_frame();
                 Some(LRESULT(0))
             }
@@ -1299,12 +1368,16 @@ impl App {
             WM_POWERBROADCAST => {
                 if let Some(on) = services::power::display_state_change(wp, lp) {
                     self.display_off = !on;
+                    if !on {
+                        self.set_dodging(false);
+                    }
                 }
                 let p = services::power::query();
                 self.on_event(AppEvent::Power(p));
                 self.tell_oyenza_activity();
                 self.tell_sysmon_rest();
                 self.set_stocks_watch();
+                self.set_crypto_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -1312,13 +1385,17 @@ impl App {
             }
             WM_WTSSESSION_CHANGE_ => {
                 match wp.0 {
-                    WTS_SESSION_LOCK_ => self.locked = true,
+                    WTS_SESSION_LOCK_ => {
+                        self.locked = true;
+                        self.set_dodging(false);
+                    }
                     WTS_SESSION_UNLOCK_ => self.locked = false,
                     _ => {}
                 }
                 self.tell_oyenza_activity();
                 self.tell_sysmon_rest();
                 self.set_stocks_watch();
+                self.set_crypto_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -1663,6 +1740,23 @@ impl App {
                 }
                 self.update_due();
             }
+            TIMER_DODGE => {
+                self.check_dodge();
+            }
+            TIMER_HIDE_DELAY => {
+                self.cancel_hide_delay();
+                if self.can_dodge() {
+                    let mut pt = POINT::default();
+                    let in_box = unsafe { GetCursorPos(&mut pt) }.is_ok() && self.cursor_in_dodge_box(pt);
+                    if in_box {
+                        let s = self.gfx.scale();
+                        let py = (pt.y - self.surface.y) as f32 / s;
+                        if py > self.hide_trigger_y() {
+                            self.set_dodging(true);
+                        }
+                    }
+                }
+            }
             TIMER_SELFTEST => {
                 if let Some(mut t) = self.selftest.take() {
                     let done = t.step(self);
@@ -1829,6 +1923,17 @@ impl App {
         self.stocks_open = open;
         if let Some(s) = self.services.as_ref() {
             s.stocks_watch(pages::stocks::watch(&self.st, open));
+        }
+    }
+
+    fn set_crypto_watch(&mut self) {
+        let open = self.mode == Mode::Expanded(PageKind::Crypto) && !self.locked && !self.display_off && self.selftest.is_none();
+        if !open && !self.crypto_open {
+            return;
+        }
+        self.crypto_open = open;
+        if let Some(s) = self.services.as_ref() {
+            s.crypto_watch(pages::crypto::watch(&self.st, open));
         }
     }
 
@@ -2547,6 +2652,7 @@ impl App {
             AppEvent::Located(found) => self.on_located(found),
             AppEvent::Cities { file, got } => pages::prayer::cities_came(&mut self.st, file, got),
             AppEvent::Stocks(ev) => self.st.stocks.apply(ev, self.st.unix),
+            AppEvent::Crypto(ev) => self.st.crypto.apply(ev, self.st.unix),
             AppEvent::Notify(ev) => self.on_notify(ev),
             AppEvent::Usage(ev) => self.on_usage(ev),
             AppEvent::AdzanEnded => self.adzan_ended(),
@@ -2663,6 +2769,7 @@ impl App {
     fn collapse(&mut self) {
         if self.expanded {
             self.expanded = false;
+            window::sync_wheel_hook(self.hwnd, false, RECT::default());
             if self.text_focus {
                 self.blur_text();
             }
@@ -2841,6 +2948,7 @@ impl App {
             }
             self.gfx.set_shown(!hide);
             if hide {
+                self.set_dodging(false);
                 self.collapse();
                 self.cancel_hover();
                 unsafe {
@@ -3265,7 +3373,152 @@ impl App {
 
     /// Where the window takes the mouse now (see [`hit_mask_for`]).
     fn hit_mask(&self) -> HitMask {
-        hit_mask_for(&self.island, self.cx, self.expanded, self.rests_hidden())
+        hit_mask_for_state(&self.island, self.cx, self.expanded, self.rests_hidden(), self.dodging)
+    }
+
+    fn can_dodge(&self) -> bool {
+        !self.expanded && self.selftest.is_none() && !self.rests_hidden() && !matches!(self.mode, Mode::Expanded(_) | Mode::Notice)
+    }
+
+    /// Reduced hitbox threshold: only the lower portion of the collapsed island
+    /// where browser tabs and titlebar buttons sit triggers dodge/hide.
+    /// The entire upper portion and top gap remain the notch hover hitbox.
+    fn hide_trigger_y(&self) -> f32 {
+        let body = self.island.body_rect_at(self.cx);
+        if self.island.floating() {
+            body.y + body.h * 0.4
+        } else {
+            body.y + body.h * 0.5
+        }
+    }
+
+    /// Box around the collapsed island where `dodging` stays active while the
+    /// user interacts with the browser tab or title bar underneath.
+    fn dodge_rect(&self) -> Rect {
+        let r = self.island.hover_rect_at(self.cx);
+        let side = if self.island.floating() { 8.0 } else { SHOULDER + 8.0 };
+        Rect::new(r.x - side, 0.0, r.w + 2.0 * side, r.bottom() + 6.0)
+    }
+
+    /// Enter or leave smart dodge: immediately updates the window's hit mask
+    /// so `y > hide_trigger_y()` passes mouse clicks through to the underlying
+    /// window, and runs `TIMER_DODGE` only while dodged.
+    fn set_dodging(&mut self, on: bool) {
+        self.cancel_hide_delay();
+        let on = on && self.can_dodge();
+        if on == self.dodging {
+            return;
+        }
+        self.dodging = on;
+        unsafe {
+            if on {
+                SetTimer(self.hwnd, TIMER_DODGE, DODGE_CHECK_MS, None);
+            } else {
+                let _ = KillTimer(self.hwnd, TIMER_DODGE);
+            }
+        }
+        if on {
+            self.hovering = false;
+            self.input.mouse = None;
+            self.cancel_hover();
+        }
+        self.update_hit_mask_now();
+        self.request_frame();
+    }
+
+    /// Check whether the pointer has left the dodged island's box or moved up
+    /// into the upper notch (`y <= hide_trigger_y()`) to open it.
+    fn check_dodge(&mut self) {
+        if !self.dodging {
+            unsafe {
+                let _ = KillTimer(self.hwnd, TIMER_DODGE);
+            }
+            return;
+        }
+        if !self.can_dodge() || self.locked || self.display_off || self.fullscreen_hidden {
+            self.set_dodging(false);
+            return;
+        }
+        let mut pt = POINT::default();
+        if unsafe { GetCursorPos(&mut pt) }.is_err() {
+            self.set_dodging(false);
+            return;
+        }
+        let s = self.gfx.scale();
+        let p = Point::new((pt.x - self.surface.x) as f32 / s, (pt.y - self.surface.y) as f32 / s);
+        let body = self.island.body_rect_at(self.cx);
+        let hy = self.hide_trigger_y();
+        if p.y >= 0.0 && p.y <= hy && p.x >= body.x && p.x <= body.right() {
+            self.set_dodging(false);
+            self.dodge_alpha = 1.0;
+            self.enter_island_hover(p);
+        } else if !self.dodge_rect().contains(p) {
+            self.set_dodging(false);
+        }
+    }
+
+    fn cursor_in_dodge_box(&self, pt: POINT) -> bool {
+        let s = self.gfx.scale();
+        let p = Point::new((pt.x - self.surface.x) as f32 / s, (pt.y - self.surface.y) as f32 / s);
+        self.dodge_rect().contains(p)
+    }
+
+    /// Handle pointer movement on the island (or its top-edge trigger strip).
+    fn enter_island_hover(&mut self, p: Point) {
+        self.input.mouse = Some(p);
+        let hy = self.hide_trigger_y();
+        let in_tab_zone = self.can_dodge() && p.y > hy;
+
+        if !self.hovering {
+            self.hovering = true;
+            self.collapse_due = false;
+            unsafe {
+                let mut tme = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
+                let _ = TrackMouseEvent(&mut tme);
+                let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
+            }
+            if !self.expanded && clock::mono() - self.left_at < REOPEN_S {
+                // Back onto the island while it is still closing.
+                self.expand();
+            } else if !self.expanded {
+                if in_tab_zone {
+                    self.arm_hide_delay();
+                } else {
+                    self.arm_hover(p);
+                }
+            }
+        } else if !self.expanded {
+            if in_tab_zone {
+                if self.hover_arm.is_some() {
+                    // Drifted down to tab zone: stop hover expand, start hide latency.
+                    self.cancel_hover();
+                    self.arm_hide_delay();
+                }
+            } else if let Some(p0) = self.hover_arm {
+                // Moving around in the upper notch: reset hover dwell.
+                if (p.x - p0.x).hypot(p.y - p0.y) > DWELL_SLOP {
+                    self.arm_hover(p);
+                }
+            } else {
+                // Moved up to upper notch: cancel hide latency, arm hover expand!
+                self.cancel_hide_delay();
+                self.arm_hover(p);
+            }
+        }
+        self.request_frame();
+    }
+
+    fn arm_hide_delay(&mut self) {
+        self.cancel_hover();
+        unsafe {
+            SetTimer(self.hwnd, TIMER_HIDE_DELAY, HIDE_LATENCY_MS, None);
+        }
+    }
+
+    fn cancel_hide_delay(&mut self) {
+        unsafe {
+            let _ = KillTimer(self.hwnd, TIMER_HIDE_DELAY);
+        }
     }
 
     /// The closed island rests invisible, a strip at the top edge that only
@@ -3434,6 +3687,7 @@ impl App {
             // Nothing is drawn, but timers, chimes and commands keep working.
             // Glass stops copying the screen: nobody sees the island.
             let off = RECT::default();
+            window::sync_wheel_hook(self.hwnd, false, off);
             self.glass.sync(false, self.hwnd, &self.sink, self.monitor.handle, off, &mut self.gfx);
             self.refresh_time();
             self.tick();
@@ -3523,6 +3777,7 @@ impl App {
         self.set_oyenza_watch(self.mode == Mode::Expanded(PageKind::Oyenza));
         self.set_today_watch(self.mode == Mode::Expanded(PageKind::Today));
         self.set_stocks_watch();
+        self.set_crypto_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge.
         self.island.set_floating(pill::on(self.st.settings.theme).then_some(pill::TOP_GAP));
@@ -3537,8 +3792,40 @@ impl App {
         let canvas_r = self.island.canvas_rect_at(self.cx);
         let geom = self.island.current();
         let content_alpha = self.island.content_alpha();
+        if self.dodging && !self.can_dodge() {
+            self.set_dodging(false);
+        }
+        let dodge_target = if self.dodging { 0.0 } else { 1.0 };
+        let mut dodge_moving = false;
+        if (self.dodge_alpha - dodge_target).abs() > 0.001 {
+            let step = (dt as f32 * 14.0).clamp(0.05, 0.45);
+            self.dodge_alpha += (dodge_target - self.dodge_alpha) * step;
+            if (self.dodge_alpha - dodge_target).abs() <= 0.005 {
+                self.dodge_alpha = dodge_target;
+            } else {
+                dodge_moving = true;
+            }
+        }
+        let dodge_alpha = if self.gfx.needs_hit_mask() {
+            self.dodge_alpha
+        } else if self.dodging {
+            0.0
+        } else {
+            1.0
+        };
         // Clear what the island covered last frame as well as this one.
         let canvas_px = px_rect(canvas_r, scale, 1, sw, sh);
+        let screen_canvas = RECT {
+            left: self.surface.x + canvas_px.left,
+            top: self.surface.y + canvas_px.top,
+            right: self.surface.x + canvas_px.right,
+            bottom: self.surface.y + canvas_px.bottom,
+        };
+        window::sync_wheel_hook(
+            self.hwnd,
+            self.shown && self.expanded && self.hovering && !self.locked && !self.display_off && self.selftest.is_none(),
+            screen_canvas,
+        );
         let full = RECT { left: 0, top: 0, right: sw, bottom: sh };
         let dirty = px_union(self.prev_canvas_px.unwrap_or(full), canvas_px);
         self.prev_canvas_px = Some(canvas_px);
@@ -3554,8 +3841,9 @@ impl App {
         let hidden_idle = self.rests_hidden() && (self.mode != Mode::Aside || self.island.settled());
         let floating = self.island.floating();
         // Software renderer: what of the floating island's hit area isn't
-        // drawn (the gap above it) is painted at 1/255 (see hit_mask_for).
-        let float_hit = if floating && !self.expanded { self.hit_mask().rect } else { None };
+        // drawn (the gap above it, or the top strip while dodged) is painted
+        // at 1/255 (see hit_mask_for).
+        let float_hit = if (floating || self.dodging) && !self.expanded { self.hit_mask().rect } else { None };
         // Content is masked to the island silhouette only while the outline
         // or the content moves. At rest every layout fits inside the body,
         // and skipping the mask layer keeps ambient frames cheap.
@@ -3592,6 +3880,7 @@ impl App {
         let copy_on = glass_theme
             && self.selftest.is_none()
             && !hidden_idle
+            && dodge_alpha > 0.002
             && !self.locked
             && !self.display_off
             && !self.fullscreen_on
@@ -3600,7 +3889,7 @@ impl App {
         self.sync_script_capture(self.st.page == PageKind::Script && (self.expanded || !self.island.settled()));
         self.sync_recording_capture(self.st.rec_live() && self.st.record_on());
         let mut glass_moving = false;
-        let glass = if glass_theme && !hidden_idle {
+        let glass = if glass_theme && !hidden_idle && dodge_alpha > 0.002 {
             let small = !matches!(mode, Mode::Expanded(_));
             let (light, p, moving) = self.glass.frame(body, geom.r, SHOULDER, small, now, dt, scale, &mut self.gfx);
             glass_moving = moving;
@@ -3623,74 +3912,88 @@ impl App {
                     // band at the top edge) takes the mouse too.
                     canvas.fill_rect(r, Color::black(1.0 / 255.0));
                 }
-                if let Some(p) = glass.as_ref() {
-                    canvas.glass(p, canvas_r);
+                let out = if dodge_alpha <= 0.002 {
+                    self.input.wheel = 0.0;
+                    (false, false, None, false)
                 } else {
-                    let island_color = if hidden_idle { Color::black(1.0 / 255.0) } else { palette::ISLAND };
-                    let border = if hidden_idle { None } else { Some(canvas.look().border) };
-                    if floating {
-                        // Hidden floats nothing: its band takes the mouse.
-                        if !hidden_idle {
-                            pill::shape::draw_body(&mut canvas, body, geom.r, island_color, border);
-                        }
-                    } else {
-                        canvas.notch(body, geom.r, SHOULDER, island_color, border);
-                    }
-                }
-
-                // Content scales about the top centre, where the island hangs
-                // (floating, about the middle of the pill end of the morph).
-                let pivot = if floating { pill::motion::pivot(body, self.island.target()) } else { Point::new(body.center().x, body.y) };
-                if morphing {
-                    canvas.clip(body);
-                    if floating {
-                        canvas.push_outline_mask(&pill::shape::segments(body, geom.r));
-                    } else {
-                        canvas.push_shape_mask(body, geom.r, SHOULDER);
-                    }
-                }
-
-                // Outgoing content: laid out at its own (old) size, centred,
-                // shrinking with the outline instead of being sliced, and
-                // fading out on a smoothstep (it holds, then leaves). Drawn as
-                // one layer, so it shrinks as a picture. Ghost input: no clicks.
-                if let Some((m, t0, g, from)) = self.outgoing {
-                    if now - t0 >= OUTGOING_FADE {
-                        self.outgoing = None;
-                    } else {
-                        let old_body = Rect::new(body.center().x - g.w / 2.0, body.y, g.w, g.h);
-                        let alpha = from * outgoing_left(now - t0);
-                        let shrink = if floating { pill::motion::ghost_scale(geom, g, GHOST_MIN_SCALE) } else { (geom.w / g.w.max(1.0)).clamp(GHOST_MIN_SCALE, 1.0) };
-                        let xf = scale_about(pivot, shrink);
-                        let st = &mut self.st;
-                        canvas.layered(old_body, alpha, xf, |c| {
-                            let mut ghost_input = Input::default();
-                            let mut ghost_hits = Vec::new();
-                            let mut ghost = Ui::new(c, &mut ghost_input, &mut ghost_hits, now);
-                            match m {
-                                Mode::Expanded(page) => pages::draw_expanded(&mut ghost, st, old_body, page, None),
-                                _ => activities::draw(&mut ghost, st, &m, old_body),
+                    let mut draw_island = |canvas: &mut Canvas<'_>| {
+                        if let Some(p) = glass.as_ref() {
+                            canvas.glass(p, canvas_r);
+                        } else {
+                            let island_color = if hidden_idle { Color::black(1.0 / 255.0) } else { palette::ISLAND };
+                            let border = if hidden_idle { None } else { Some(canvas.look().border) };
+                            if floating {
+                                // Hidden floats nothing: its band takes the mouse.
+                                if !hidden_idle {
+                                    pill::shape::draw_body(canvas, body, geom.r, island_color, border);
+                                }
+                            } else {
+                                canvas.notch(body, geom.r, SHOULDER, island_color, border);
                             }
-                        });
-                    }
-                }
+                        }
 
-                // Incoming content settles down from the bezel as it fades in,
-                // as one layer, so its text doesn't re-hint every frame.
-                let out = if content_alpha < 1.0 {
-                    let grow = scale_about(pivot, CONTENT_SCALE_FROM + (1.0 - CONTENT_SCALE_FROM) * content_alpha);
-                    let drop_by = if floating { pill::motion::CONTENT_DROP } else { CONTENT_DROP };
-                    let xf = grow * Matrix3x2::translation(0.0, -drop_by * (1.0 - content_alpha));
-                    let (input, st) = (&mut self.input, &mut self.st);
-                    canvas.layered(union_rect(lay, body), content_alpha, xf, |c| draw_content(c, input, &mut hits, st, mode, lay, body, transition, now))
-                } else {
-                    draw_content(&mut canvas, &mut self.input, &mut hits, &mut self.st, mode, lay, body, transition, now)
+                        // Content scales about the top centre, where the island hangs
+                        // (floating, about the middle of the pill end of the morph).
+                        let pivot = if floating { pill::motion::pivot(body, self.island.target()) } else { Point::new(body.center().x, body.y) };
+                        if morphing {
+                            canvas.clip(body);
+                            if floating {
+                                canvas.push_outline_mask(&pill::shape::segments(body, geom.r));
+                            } else {
+                                canvas.push_shape_mask(body, geom.r, SHOULDER);
+                            }
+                        }
+
+                        // Outgoing content: laid out at its own (old) size, centred,
+                        // shrinking with the outline instead of being sliced, and
+                        // fading out on a smoothstep (it holds, then leaves). Drawn as
+                        // one layer, so it shrinks as a picture. Ghost input: no clicks.
+                        if let Some((m, t0, g, from)) = self.outgoing {
+                            if now - t0 >= OUTGOING_FADE {
+                                self.outgoing = None;
+                            } else {
+                                let old_body = Rect::new(body.center().x - g.w / 2.0, body.y, g.w, g.h);
+                                let alpha = from * outgoing_left(now - t0);
+                                let shrink = if floating { pill::motion::ghost_scale(geom, g, GHOST_MIN_SCALE) } else { (geom.w / g.w.max(1.0)).clamp(GHOST_MIN_SCALE, 1.0) };
+                                let xf = scale_about(pivot, shrink);
+                                let st = &mut self.st;
+                                canvas.layered(old_body, alpha, xf, |c| {
+                                    let mut ghost_input = Input::default();
+                                    let mut ghost_hits = Vec::new();
+                                    let mut ghost = Ui::new(c, &mut ghost_input, &mut ghost_hits, now);
+                                    match m {
+                                        Mode::Expanded(page) => pages::draw_expanded(&mut ghost, st, old_body, page, None),
+                                        _ => activities::draw(&mut ghost, st, &m, old_body),
+                                    }
+                                });
+                            }
+                        }
+
+                        // Incoming content settles down from the bezel as it fades in,
+                        // as one layer, so its text doesn't re-hint every frame.
+                        let out = if content_alpha < 1.0 {
+                            let grow = scale_about(pivot, CONTENT_SCALE_FROM + (1.0 - CONTENT_SCALE_FROM) * content_alpha);
+                            let drop_by = if floating { pill::motion::CONTENT_DROP } else { CONTENT_DROP };
+                            let xf = grow * Matrix3x2::translation(0.0, -drop_by * (1.0 - content_alpha));
+                            let (input, st) = (&mut self.input, &mut self.st);
+                            canvas.layered(union_rect(lay, body), content_alpha, xf, |c| draw_content(c, input, &mut hits, st, mode, lay, body, transition, now))
+                        } else {
+                            draw_content(canvas, &mut self.input, &mut hits, &mut self.st, mode, lay, body, transition, now)
+                        };
+                        if morphing {
+                            canvas.pop_shape_mask();
+                            canvas.unclip();
+                        }
+                        out
+                    };
+                    if dodge_alpha < 0.999 {
+                        let xf = Matrix3x2::translation(0.0, -DODGE_LIFT_DIP * (1.0 - dodge_alpha));
+                        canvas.layered(canvas_r, dodge_alpha, xf, draw_island)
+                    } else {
+                        draw_island(&mut canvas)
+                    }
                 };
                 wheel_left = self.input.wheel;
-                if morphing {
-                    canvas.pop_shape_mask();
-                    canvas.unclip();
-                }
                 drop(canvas);
                 if let Err(e) = self.gfx.end() {
                     pwarn!("EndDraw failed: {e}");
@@ -3703,6 +4006,9 @@ impl App {
                 (false, false, None, false)
             }
         };
+        if self.dodging {
+            hits.clear();
+        }
         self.hits = hits;
 
         // Unconsumed wheel over the header switches pages: one page per whole
@@ -3768,12 +4074,14 @@ impl App {
         // Decide whether to keep the frame clock running. Real motion runs
         // at the display's full refresh rate; ambient motion runs on every
         // n-th refresh (the equalizer near 60 fps, a drifting progress bar
-        // near 30) and pauses while the session is locked or the display off.
-        let ambient_ok = !self.locked && !self.display_off;
+        // near 30) and pauses while the session is locked, the display off,
+        // or the island is fully dodged out of sight.
+        let ambient_ok = !self.locked && !self.display_off && !(self.dodging && self.dodge_alpha <= 0.002);
         let eq_live = ambient_ok && activities::is_live(&self.mode, &self.st);
         let drift_live = ambient_ok && ui_live;
         self.glass_moving = glass_moving;
         let moving = !self.island.settled()
+            || dodge_moving
             || anim
             || repaint
             || renderer_changed
@@ -3807,9 +4115,31 @@ impl App {
         let mask = self.hit_mask();
         let due = match &self.mask {
             None => true,
-            Some((m, at)) => *m != mask && (self.island.settled() || now - at >= MASK_INTERVAL),
+            Some((m, at)) => *m != mask && (self.island.settled() || self.dodging || now - at >= MASK_INTERVAL),
         };
         if !due {
+            return;
+        }
+        let prev = self.mask.map(|(m, _)| m);
+        match self.gfx.push_hit_mask(self.surface.x, self.surface.y, &mask, prev.as_ref()) {
+            Ok(()) => self.mask = Some((mask, now)),
+            Err(e) => {
+                pwarn!("hit mask update failed: {e}");
+                self.mask = None;
+            }
+        }
+    }
+
+    /// Push the window's hit mask immediately (used when entering or leaving
+    /// smart dodge so clicks pass through to underlying tabs without waiting
+    /// for the next frame).
+    fn update_hit_mask_now(&mut self) {
+        if !self.gfx.needs_hit_mask() {
+            return;
+        }
+        let now = clock::mono();
+        let mask = self.hit_mask();
+        if self.mask.as_ref().is_some_and(|(m, _)| *m == mask) {
             return;
         }
         let prev = self.mask.map(|(m, _)| m);
@@ -5438,11 +5768,24 @@ fn surface_size(island: &Island, body_w: f32, body_h: f32, scale: f32, mon_w: i3
 /// body, as Classic's hidden strip does, so what sits under the gap keeps
 /// its clicks. The GPU renderer pushes this as the window's hit mask; the
 /// software renderer paints it at alpha 1/255 under the island.
+#[cfg(test)]
 fn hit_mask_for(island: &Island, cx: f32, expanded: bool, hidden: bool) -> HitMask {
+    hit_mask_for_state(island, cx, expanded, hidden, false)
+}
+
+/// Hit mask including smart dodge: while `dodging` is true on the collapsed
+/// island, only the upper notch portion (`0..trigger_y`) takes the mouse so
+/// clicks on browser tabs and titlebar buttons (`y > trigger_y`) pass
+/// straight through to the window underneath.
+fn hit_mask_for_state(island: &Island, cx: f32, expanded: bool, hidden: bool, dodging: bool) -> HitMask {
     if expanded {
         return HitMask { rect: Some(island.canvas_rect_at(cx)), notch: None, pill: None };
     }
     let body = island.body_rect_at(cx);
+    if dodging && !hidden {
+        let trigger_y = if island.floating() { body.y + island.current().h * 0.4 } else { body.y + island.current().h * 0.5 };
+        return HitMask { rect: Some(Rect::new(body.x, 0.0, body.w, trigger_y)), notch: None, pill: None };
+    }
     if !island.floating() {
         return HitMask { rect: None, notch: Some((body, island.current().r, SHOULDER)), pill: None };
     }
@@ -5635,6 +5978,26 @@ mod tests {
                 assert_eq!((mon_w - floating.0) % 2, 0);
                 i.set_floating(None);
                 assert_eq!(surface_size(&i, 620.0, 400.0, s, mon_w), classic, "back to Classic at {s} on {mon_w}");
+            }
+        }
+    }
+
+    #[test]
+    fn dodging_island_passes_tab_clicks_through_and_keeps_top_edge() {
+        for floating in [false, true] {
+            let i = island(Geom::new(152.0, 32.0, 16.0), floating);
+            let body = i.body_rect_at(CX);
+            let trigger_y = if floating { body.y + 32.0 * 0.4 } else { body.y + 32.0 * 0.5 };
+            let m = hit_mask_for_state(&i, CX, false, false, true);
+            assert_eq!(m, HitMask { rect: Some(Rect::new(body.x, 0.0, body.w, trigger_y)), notch: None, pill: None });
+            // Upper notch (`y = 0 .. trigger_y`) still catches the pointer to restore/open the island.
+            assert!(m.contains(pt(CX, 0.0)));
+            assert!(m.contains(pt(body.x + 1.0, trigger_y - 0.1)));
+            // Reduced lower tab area (`y > trigger_y`) is completely click-through.
+            for y in [trigger_y + 0.5, 24.0, 32.0, 38.0] {
+                if y > trigger_y {
+                    assert!(!m.contains(pt(CX, y)), "click-through at y={y} (floating={floating})");
+                }
             }
         }
     }

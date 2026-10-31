@@ -214,6 +214,17 @@ pub const STOCKS: Addon = Addon {
     pro: false,
 };
 
+/// Crypto: real-time cryptocurrency prices, 24h charts and trends.
+pub const CRYPTO: Addon = Addon {
+    id: "crypto",
+    title: "Crypto",
+    blurb: "Real-time cryptocurrency prices, charts and 24h market trends.",
+    mac_blurb: None,
+    tag: "",
+    files: &[],
+    pro: false,
+};
+
 /// Notifications (Windows): other apps' notifications in the island, from
 /// the apps the person picks on its page (WhatsApp, Telegram and Phone Link
 /// to begin with), read through Windows' notification listener
@@ -357,8 +368,8 @@ pub const MEETING_NOTES: Addon = Addon {
 };
 
 /// Every add-on, in the order the Add-ons page lists them.
-pub const ALL: [&Addon; 11] =
-    [&PRAYER_TIMES, &JAPANESE_READINGS, &SCRIPT_READER, &SYSTEM, &HEALTH, &STOCKS, &NOTIFICATIONS, &IELTS, &MEETING_NOTES, &SCREEN_RECORDER, &DOWNLOADER];
+pub const ALL: [&Addon; 12] =
+    [&PRAYER_TIMES, &JAPANESE_READINGS, &SCRIPT_READER, &SYSTEM, &HEALTH, &STOCKS, &CRYPTO, &NOTIFICATIONS, &IELTS, &MEETING_NOTES, &SCREEN_RECORDER, &DOWNLOADER];
 
 /// Whether Japanese readings switch themselves on for a song whose kanji went
 /// unread for want of them (`wants`): only while the person reads
@@ -474,7 +485,7 @@ mod tests {
 
     #[test]
     fn built_in_add_ons_are_off_until_switched_on() {
-        for a in [&SYSTEM, &HEALTH, &STOCKS, &NOTIFICATIONS, &IELTS, &MEETING_NOTES] {
+        for a in [&SYSTEM, &HEALTH, &STOCKS, &CRYPTO, &NOTIFICATIONS, &IELTS, &MEETING_NOTES] {
             assert!(!a.downloads() && a.size() == 0, "{}", a.id);
             assert_eq!(Addon::find(a.id), Some(a));
             assert_eq!(Status::Ready.line(a, false), "On");
@@ -575,7 +586,7 @@ mod tests {
     fn add_ons_are_listed_in_order_each_with_its_own_id() {
         // The Add-ons page's order: the Downloader last.
         let ids: Vec<&str> = ALL.iter().map(|a| a.id).collect();
-        assert_eq!(ids, ["sholat", "ja", "script", "system", "health", "stocks", "notifications", "ielts", "notes", "recorder", "downloader"]);
+        assert_eq!(ids, ["sholat", "ja", "script", "system", "health", "stocks", "crypto", "notifications", "ielts", "notes", "recorder", "downloader"]);
         for (i, a) in ALL.iter().enumerate() {
             // The key in settings.json and the folder's name.
             assert!(!a.id.is_empty() && a.id.bytes().all(|b| b.is_ascii_lowercase()), "{}", a.id);
