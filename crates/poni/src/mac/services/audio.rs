@@ -330,3 +330,23 @@ pub fn start(sink: EventSink) {
         pwarn!("audio: no device-list notifications ({r}); no headphone pop-ups");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Per-App Volume Mixer stubs for Mac
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppVolumeSession {
+    pub pid: u32,
+    pub name: String,
+    pub volume: f32,
+    pub muted: bool,
+}
+
+pub fn list_app_sessions() -> Vec<AppVolumeSession> {
+    Vec::new()
+}
+
+pub fn set_app_volume(_pid: u32, _volume: f32) {}
+pub fn set_app_mute(_pid: u32, _muted: bool) {}
+pub fn set_master_volume(_level: f32) {}
+pub fn set_master_mute(_muted: bool) {}

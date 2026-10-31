@@ -16,12 +16,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use windows::core::{implement, Result, PCWSTR};
+use windows::core::{implement, Interface, Result, PCWSTR};
 use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl};
 use windows::Win32::Media::Audio::{
     eConsole, eMultimedia, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl,
     MMDeviceEnumerator, AUDCLNT_E_DEVICE_INVALIDATED, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
+    IAudioSessionManager2, ISimpleAudioVolume, IAudioSessionControl2,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
@@ -337,5 +338,155 @@ fn device_id(device: &IMMDevice) -> String {
             id
         }
         _ => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-App Volume Mixer
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppVolumeSession {
+    pub pid: u32,
+    pub name: String,
+    pub volume: f32,
+    pub muted: bool,
+}
+
+fn process_name_for_pid(pid: u32) -> String {
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::core::PWSTR;
+
+    if let Ok(h) = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let r = unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len) };
+        unsafe { let _ = CloseHandle(h); }
+        if r.is_ok() && len > 0 {
+            let path_str = String::from_utf16_lossy(&buf[..len as usize]);
+            if let Some(stem) = std::path::Path::new(&path_str).file_stem().and_then(|s| s.to_str()) {
+                return match stem.to_ascii_lowercase().as_str() {
+                    "chrome" => "Google Chrome".into(),
+                    "msedge" => "Microsoft Edge".into(),
+                    "firefox" => "Mozilla Firefox".into(),
+                    "spotify" => "Spotify".into(),
+                    "discord" => "Discord".into(),
+                    "code" => "VS Code".into(),
+                    "steam" => "Steam".into(),
+                    "vlc" => "VLC Media Player".into(),
+                    "telegram" => "Telegram".into(),
+                    "whatsapp" => "WhatsApp".into(),
+                    _ => {
+                        let mut c = stem.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                        }
+                    }
+                };
+            }
+        }
+    }
+    format!("App ({pid})")
+}
+
+pub fn list_app_sessions() -> Vec<AppVolumeSession> {
+    let _apt = ComApartment::enter_mta();
+    let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else {
+        return Vec::new();
+    };
+    let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else {
+        return Vec::new();
+    };
+    let Ok(mgr) = (unsafe { device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }) else {
+        return Vec::new();
+    };
+    let Ok(session_enum) = (unsafe { mgr.GetSessionEnumerator() }) else {
+        return Vec::new();
+    };
+    let count = unsafe { session_enum.GetCount() }.unwrap_or(0);
+    let mut sessions = Vec::new();
+    let mut seen_pids = std::collections::HashSet::new();
+
+    for i in 0..count {
+        let Ok(control) = (unsafe { session_enum.GetSession(i) }) else { continue };
+        let Ok(control2) = control.cast::<IAudioSessionControl2>() else { continue };
+        let pid = unsafe { control2.GetProcessId() }.unwrap_or(0);
+        if pid == 0 || !seen_pids.insert(pid) {
+            continue;
+        }
+        let is_sys = unsafe { control2.IsSystemSoundsSession() };
+        if is_sys == windows::Win32::Foundation::S_OK {
+            continue;
+        }
+        let Ok(vol_ctrl) = control.cast::<ISimpleAudioVolume>() else { continue };
+        let volume = unsafe { vol_ctrl.GetMasterVolume() }.unwrap_or(1.0);
+        let muted = unsafe { vol_ctrl.GetMute() }.map(|b| b.as_bool()).unwrap_or(false);
+        let name = process_name_for_pid(pid);
+        sessions.push(AppVolumeSession { pid, name, volume, muted });
+    }
+    sessions.sort_by(|a, b| a.name.cmp(&b.name));
+    sessions
+}
+
+pub fn set_app_volume(target_pid: u32, volume: f32) {
+    let _apt = ComApartment::enter_mta();
+    let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
+    let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
+    let Ok(mgr) = (unsafe { device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }) else { return };
+    let Ok(session_enum) = (unsafe { mgr.GetSessionEnumerator() }) else { return };
+    let count = unsafe { session_enum.GetCount() }.unwrap_or(0);
+    for i in 0..count {
+        let Ok(control) = (unsafe { session_enum.GetSession(i) }) else { continue };
+        if let Ok(control2) = control.cast::<IAudioSessionControl2>() {
+            if let Ok(pid) = unsafe { control2.GetProcessId() } {
+                if pid == target_pid {
+                    if let Ok(vol_ctrl) = control.cast::<ISimpleAudioVolume>() {
+                        let _ = unsafe { vol_ctrl.SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null()) };
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub fn set_app_mute(target_pid: u32, muted: bool) {
+    let _apt = ComApartment::enter_mta();
+    let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
+    let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
+    let Ok(mgr) = (unsafe { device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) }) else { return };
+    let Ok(session_enum) = (unsafe { mgr.GetSessionEnumerator() }) else { return };
+    let count = unsafe { session_enum.GetCount() }.unwrap_or(0);
+    for i in 0..count {
+        let Ok(control) = (unsafe { session_enum.GetSession(i) }) else { continue };
+        if let Ok(control2) = control.cast::<IAudioSessionControl2>() {
+            if let Ok(pid) = unsafe { control2.GetProcessId() } {
+                if pid == target_pid {
+                    if let Ok(vol_ctrl) = control.cast::<ISimpleAudioVolume>() {
+                        let _ = unsafe { vol_ctrl.SetMute(muted, std::ptr::null()) };
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub fn set_master_volume(level: f32) {
+    let _apt = ComApartment::enter_mta();
+    let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
+    let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
+    if let Ok(volume) = (unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }) {
+        let _ = unsafe { volume.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null()) };
+    }
+}
+
+pub fn set_master_mute(muted: bool) {
+    let _apt = ComApartment::enter_mta();
+    let Ok(enumerator) = (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }) else { return };
+    let Ok(device) = (unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }) else { return };
+    if let Ok(volume) = (unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) }) {
+        let _ = unsafe { volume.SetMute(muted, std::ptr::null()) };
     }
 }

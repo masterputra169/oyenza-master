@@ -336,6 +336,8 @@ pub struct PageUiState {
     pub today_weather: bool,
     /// Shows Forex & Gold instead of stocks list in Stocks page.
     pub stocks_forex_mode: bool,
+    /// Shows Volume Mixer instead of player in Media page.
+    pub media_mixer_mode: bool,
     /// Picked Forex symbol (e.g. "USD/IDR", "EMAS").
     pub forex_pick: Option<String>,
     /// Smoothly animated lyric scroll position (line index as float).
@@ -885,6 +887,9 @@ pub struct AppState {
     pub weather: WeatherState,
     /// Real-time Forex & Gold.
     pub forex: ForexState,
+    /// Per-application audio sessions for volume mixer.
+    pub app_sessions: Vec<crate::services::audio::AppVolumeSession>,
+    pub app_sessions_time: f64,
     /// The Downloads page's jobs (`poni_core::downloads`), in memory only.
     pub downloads: poni_core::downloads::Jobs,
     /// This app offers the Downloader: Windows outside the Microsoft Store
@@ -977,6 +982,8 @@ impl AppState {
             crypto: CryptoState::default(),
             weather: WeatherState::default(),
             forex: ForexState::default(),
+            app_sessions: Vec::new(),
+            app_sessions_time: 0.0,
             downloads: poni_core::downloads::Jobs::default(),
             downloader_offered: false,
             rec: RecView::default(),
