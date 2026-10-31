@@ -408,12 +408,12 @@ fn draw_session(ui: &mut Ui, st: &mut AppState, area: Rect, a: &mut Anim, fr: &F
     };
     if let Some(label) = source {
         let dot = if playing { accent } else { accent.mul_alpha(0.45) };
-        draw_source(ui, mid.x, y0 + SOURCE_Y, mid.w - 74.0, &label, dot, scale);
+        draw_source(ui, mid.x, y0 + SOURCE_Y, mid.w - 120.0, &label, dot, scale);
     }
 
-    let mixer_w = 68.0;
-    let mixer_pill = Rect::new(mid.right() - mixer_w, y0 + SOURCE_Y - 2.0, mixer_w, 20.0);
-    if ui.pill(wid("media.open_mixer"), mixer_pill, "Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
+    let mixer_w = 110.0;
+    let mixer_pill = Rect::new(mid.right() - mixer_w, y0 + SOURCE_Y - 2.0, mixer_w, 22.0);
+    if ui.pill(wid("media.open_mixer"), mixer_pill, "Volume Mixer", Some(Icon::Sliders), PillStyle::Utility).clicked {
         st.ui.media_mixer_mode = true;
     }
 
@@ -1222,11 +1222,11 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let title_st = TextStyle::headline().weight(Weight::Bold);
     let sub_st = TextStyle::caption().color(palette::TEXT_DIM);
     ui.c.text("Volume Mixer", Rect::new(x0, y0 - 4.0, 160.0, 20.0), &title_st);
-    ui.c.text("Atur level suara per-aplikasi", Rect::new(x0, y0 + 16.0, 200.0, 16.0), &sub_st);
+    ui.c.text("Per-app audio levels & mute controls", Rect::new(x0, y0 + 16.0, 240.0, 16.0), &sub_st);
 
     // Back to Music button
-    let back_w = 78.0;
-    if ui.pill(wid("mixer.back"), Rect::new(x0 + w - back_w, y0 - 4.0, back_w, 24.0), "Musik", Some(Icon::Music), PillStyle::Utility).clicked {
+    let back_w = 110.0;
+    if ui.pill(wid("mixer.back"), Rect::new(x0 + w - back_w, y0 - 4.0, back_w, 24.0), "Now Playing", Some(Icon::Music), PillStyle::Utility).clicked {
         st.ui.media_mixer_mode = false;
         return;
     }
@@ -1276,7 +1276,7 @@ fn draw_mixer(ui: &mut Ui, st: &mut AppState, area: Rect) {
     if st.app_sessions.is_empty() {
         let empty_r = Rect::new(x0, app_y0, w, 68.0);
         super::card::fill_box(ui, None, empty_r, 10.0, palette::SURFACE);
-        ui.c.text("Tidak ada aplikasi lain yang sedang memutar suara", Rect::new(empty_r.x + 16.0, empty_r.y + 24.0, empty_r.w - 32.0, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM).center());
+        ui.c.text("No other apps are currently playing audio", Rect::new(empty_r.x + 16.0, empty_r.y + 24.0, empty_r.w - 32.0, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM).center());
     } else {
         let row_h = 32.0;
         let gap = 6.0;

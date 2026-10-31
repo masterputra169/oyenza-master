@@ -3060,7 +3060,7 @@ impl App {
             if hit {
                 alert.triggered = true;
                 save = true;
-                let dir = if alert.above { "naik menembus" } else { "turun menembus" };
+                let dir = if alert.above { "rose above" } else { "fell below" };
                 let col = if alert.above { palette::GREEN } else { palette::RED };
                 let formatted_target = if alert.source == "crypto" {
                     poni_core::crypto::fmt_price(alert.target_price)
@@ -3076,8 +3076,8 @@ impl App {
                 } else {
                     format!("Rp {}", price.round() as i64)
                 };
-                let title = format!("🔔 Target Tercapai: {}", alert.code);
-                let subtitle = format!("{} {} {} (Kini {})", alert.code, dir, formatted_target, formatted_curr);
+                let title = format!("🔔 Target Reached: {}", alert.code);
+                let subtitle = format!("{} {} {} (Now {})", alert.code, dir, formatted_target, formatted_curr);
                 notify_args = Some((col, title, subtitle));
                 break;
             }

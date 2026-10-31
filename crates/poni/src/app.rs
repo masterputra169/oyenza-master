@@ -1972,8 +1972,9 @@ impl App {
         }
         if let Some(ref p) = self.st.prayer.place {
             (p.lat, p.lng, p.label.clone())
-        } else if let Some((lat, lng, _)) = self.st.prayer.last_fix {
-            (lat, lng, "Local".into())
+        } else if let Some((lat, lng, ref found)) = self.st.prayer.last_fix {
+            let label = found.as_ref().map(|(p, _)| p.label.clone()).unwrap_or_else(|| "Local Device".into());
+            (lat, lng, label)
         } else {
             (-6.2088, 106.8456, "Jakarta".into())
         }
@@ -1982,6 +1983,9 @@ impl App {
     fn set_weather_watch(&mut self) {
         let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
         let open = (self.mode == Mode::Expanded(PageKind::Weather) || self.mode == Mode::Expanded(PageKind::Today) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none();
+        if open && self.st.store.weather_city.is_none() && self.st.prayer.last_fix.is_none() && self.st.prayer.place.is_none() {
+            self.locate();
+        }
         if !open && !self.weather_open {
             return;
         }
@@ -2033,7 +2037,7 @@ impl App {
             if hit {
                 alert.triggered = true;
                 save = true;
-                let dir = if alert.above { "naik menembus" } else { "turun menembus" };
+                let dir = if alert.above { "rose above" } else { "fell below" };
                 let col = if alert.above { palette::GREEN } else { palette::RED };
                 let formatted_target = if alert.source == "crypto" {
                     poni_core::crypto::fmt_price(alert.target_price)
@@ -2049,8 +2053,8 @@ impl App {
                 } else {
                     format!("Rp {}", price.round() as i64)
                 };
-                let title = format!("🔔 Target Tercapai: {}", alert.code);
-                let subtitle = format!("{} {} {} (Kini {})", alert.code, dir, formatted_target, formatted_curr);
+                let title = format!("🔔 Target Reached: {}", alert.code);
+                let subtitle = format!("{} {} {} (Now {})", alert.code, dir, formatted_target, formatted_curr);
                 notify_args = Some((col, title, subtitle));
                 break;
             }
@@ -4634,7 +4638,10 @@ impl App {
             Located::Denied => self.st.prayer.locate = Locate::Denied,
             Located::Unknown => self.st.prayer.locate = Locate::Unknown,
             // Kemenag's places, or the world's cities around it (looked up online).
-            Located::At(lat, lng) => pages::prayer::located(&mut self.st, lat, lng),
+            Located::At(lat, lng) => {
+                pages::prayer::located(&mut self.st, lat, lng);
+                self.set_weather_watch();
+            }
         }
     }
 

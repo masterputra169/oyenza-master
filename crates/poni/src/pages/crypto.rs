@@ -578,7 +578,7 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     if bell_resp.clicked {
         if has_alert {
             st.store.alerts.retain(|a| !(a.source == "crypto" && a.code.eq_ignore_ascii_case(&pick)));
-            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Notifikasi target {} dimatikan", pick), 3.0, None);
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Removed", &format!("Price alert for {} disabled", pick), 3.0, None);
         } else if let Some(ref cur_q) = q {
             let target = if cur_q.price > 0.0 { (cur_q.price * 1.05 * 100.0).round() / 100.0 } else { 1.0 };
             let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
@@ -591,7 +591,7 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
                 triggered: false,
                 enabled: true,
             });
-            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus {}", pick, crypto::fmt_price(target)), 4.0, None);
+            st.notify(Icon::Bell, st.accent, "Price Alert Set!", &format!("{}: Alert when price reaches {}", pick, crypto::fmt_price(target)), 4.0, None);
         }
         st.save();
     }

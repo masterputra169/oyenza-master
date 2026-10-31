@@ -43,23 +43,23 @@ pub struct WeatherReport {
 impl WeatherReport {
     pub fn condition(&self) -> &'static str {
         match self.code {
-            0 => "Cerah",
-            1 => "Cerah Berawan",
-            2 => "Sebagian Berawan",
-            3 => "Berawan",
-            45 | 48 => "Berkabut",
-            51 | 53 | 55 => "Gerimis",
-            56 | 57 => "Gerimis Dingin",
-            61 | 63 => "Hujan",
-            65 => "Hujan Deras",
-            66 | 67 => "Hujan Salju",
-            71 | 73 | 75 | 77 => "Salju",
-            80 | 81 => "Hujan Ringan",
-            82 => "Hujan Lebat",
-            85 | 86 => "Badai Salju",
-            95 => "Badai Petir",
-            96 | 99 => "Badai Petir & Es",
-            _ => "Berawan",
+            0 => "Clear Sky",
+            1 => "Mainly Clear",
+            2 => "Partly Cloudy",
+            3 => "Overcast",
+            45 | 48 => "Foggy",
+            51 | 53 | 55 => "Drizzle",
+            56 | 57 => "Freezing Drizzle",
+            61 | 63 => "Rain",
+            65 => "Heavy Rain",
+            66 | 67 => "Freezing Rain",
+            71 | 73 | 75 | 77 => "Snow",
+            80 | 81 => "Rain Showers",
+            82 => "Violent Rain Showers",
+            85 | 86 => "Snow Showers",
+            95 => "Thunderstorm",
+            96 | 99 => "Thunderstorm with Hail",
+            _ => "Cloudy",
         }
     }
 
@@ -124,8 +124,8 @@ mod tests {
         assert_eq!(report.city, "Jakarta");
         assert!((report.temp - 30.6).abs() < 0.01);
         assert_eq!(report.humidity, 64);
-        assert_eq!(report.condition(), "Gerimis");
+        assert_eq!(report.condition(), "Drizzle");
         assert_eq!(report.icon_emoji(), "🌦️");
-        assert_eq!(report.idle_text(), "31°C Gerimis");
+        assert_eq!(report.idle_text(), "31°C Drizzle");
     }
 }

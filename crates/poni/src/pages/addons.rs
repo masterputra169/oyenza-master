@@ -126,6 +126,8 @@ fn icon(a: &Addon) -> Icon {
         "system" => Icon::Gauge,
         "health" => Icon::Steps,
         "stocks" => Icon::Stocks,
+        "crypto" => Icon::Crypto,
+        "weather" => Icon::Sun,
         "notifications" => Icon::Bell,
         "recorder" => Icon::Recorder,
         "downloader" => Icon::Download,

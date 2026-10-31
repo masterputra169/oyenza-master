@@ -304,7 +304,7 @@ fn apply(st: &mut AppState, l: &mut Local, items: &[ShelfItem], actions: Vec<Act
                 crate::services::clipboard::copy_text(&text);
                 let preview: String = text.chars().take(28).collect();
                 let subtitle = if text.len() > 28 { format!("{preview}…") } else { preview };
-                st.notify(Icon::Notes, st.accent, "Tersalin ke Clipboard", &subtitle, 2.5, None);
+                st.notify(Icon::Notes, st.accent, "Copied to Clipboard", &subtitle, 2.5, None);
             }
             Action::RemoveSnippet(id) => {
                 st.store.shelf.remove_clipboard_snippet(id);
@@ -601,8 +601,8 @@ fn draw_clipboard(ui: &mut Ui, st: &AppState, _l: &mut Local, area: Rect, _card:
     // Header
     let title_st = TextStyle::headline().weight(Weight::Bold);
     let sub_st = TextStyle::caption().color(palette::TEXT_DIM);
-    ui.c.text("Riwayat Clipboard", Rect::new(x0, y0 - 4.0, 160.0, 20.0), &title_st);
-    ui.c.text("Teks yang baru disalin otomatis tercatat", Rect::new(x0, y0 + 16.0, 240.0, 16.0), &sub_st);
+    ui.c.text("Clipboard History", Rect::new(x0, y0 - 4.0, 160.0, 20.0), &title_st);
+    ui.c.text("Recently copied text is automatically saved", Rect::new(x0, y0 + 16.0, 260.0, 16.0), &sub_st);
 
     // Right pills: Clear (if any snippets) and Files (back to files)
     let back_w = 68.0;
@@ -615,7 +615,7 @@ fn draw_clipboard(ui: &mut Ui, st: &AppState, _l: &mut Local, area: Rect, _card:
     if !st.store.shelf.clipboard.is_empty() {
         let clear_w = 68.0;
         let clear_r = Rect::new(back_r.x - clear_w - 6.0, y0 - 4.0, clear_w, 24.0);
-        if ui.pill(wid("shelf.clip_clear"), clear_r, "Hapus", Some(Icon::Trash), PillStyle::Utility).clicked {
+        if ui.pill(wid("shelf.clip_clear"), clear_r, "Clear", Some(Icon::Trash), PillStyle::Utility).clicked {
             actions.push(Action::ClearClipboard);
         }
     }
@@ -626,7 +626,7 @@ fn draw_clipboard(ui: &mut Ui, st: &AppState, _l: &mut Local, area: Rect, _card:
         let empty_r = Rect::new(x0, list_y, w, 80.0);
         super::card::fill_box(ui, None, empty_r, 12.0, palette::SURFACE);
         ui.c.text(
-            "Belum ada riwayat clipboard. Setiap teks yang disalin (Ctrl+C) akan muncul di sini.",
+            "No clipboard history yet. Any text you copy (Ctrl+C) will appear here.",
             Rect::new(empty_r.x + 16.0, empty_r.y + 28.0, empty_r.w - 32.0, 24.0),
             &TextStyle::footnote().color(palette::TEXT_DIM).center(),
         );
@@ -658,7 +658,7 @@ fn draw_clipboard(ui: &mut Ui, st: &AppState, _l: &mut Local, area: Rect, _card:
             // Copy pill button
             let copy_btn_w = 54.0;
             let copy_r = Rect::new(row_r.right() - action_w + 6.0, row_r.y + 4.0, copy_btn_w, 24.0);
-            if ui.pill(wid_n("shelf.clip_copy", snippet.id), copy_r, "Salin", None, PillStyle::Primary(st.accent)).clicked {
+            if ui.pill(wid_n("shelf.clip_copy", snippet.id), copy_r, "Copy", None, PillStyle::Primary(st.accent)).clicked {
                 actions.push(Action::CopySnippet(snippet.text.clone()));
             }
 

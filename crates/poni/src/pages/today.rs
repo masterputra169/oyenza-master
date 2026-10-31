@@ -270,7 +270,7 @@ fn draw_weeks_grid(ui: &mut Ui, st: &AppState, r: Rect, days: Option<(&Weeks, So
     let w_label = if let Some(ref w) = st.weather.report {
         format!("{} {:.0}°", w.icon_emoji(), w.temp)
     } else {
-        "🌤️ Cuaca".to_string()
+        "🌤️ Weather".to_string()
     };
     let wx = r.x + dw + 10.0;
     let wr = Rect::new(wx, r.y + 18.0, (r.right() - wx).max(58.0), 20.0);
@@ -760,7 +760,7 @@ fn draw_weather(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32
     let inner = r.inset(14.0, 12.0);
 
     let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
-    let city = st.weather.report.as_ref().map(|w| w.city.as_str()).unwrap_or("Lokasi");
+    let city = st.weather.report.as_ref().map(|w| w.city.as_str()).unwrap_or("Location");
     let city_label = format!("📍 {city}");
     ui.c.text(&city_label, Rect::new(inner.x, inner.y, 140.0, 20.0), &TextStyle::caption().weight(Weight::Bold).color(st.accent));
 
@@ -795,7 +795,7 @@ fn draw_weather(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32
         let temp_str = format!("{:.0}°C {}", w.temp, w.icon_emoji());
         ui.c.text(&temp_str, Rect::new(inner.x, inner.y + 24.0, inner.w, 40.0), &TextStyle::display());
 
-        let sub = format!("{} · Terasa {:.0}°C", w.condition(), w.feels_like);
+        let sub = format!("{} · Feels like {:.0}°C", w.condition(), w.feels_like);
         ui.c.text(&sub, Rect::new(inner.x, inner.y + 64.0, inner.w, 20.0), &TextStyle::footnote().color(palette::TEXT_DIM));
 
         let my = inner.y + 90.0;
@@ -803,18 +803,18 @@ fn draw_weather(ui: &mut Ui, st: &mut AppState, r: Rect, card: Option<(Rect, f32
         let cols = Rect::new(inner.x, my, inner.w, mh).columns(3, 8.0);
 
         super::card::fill_box(ui, None, cols[0], 10.0, palette::SURFACE_HOVER);
-        ui.c.text("Kelembaban", Rect::new(cols[0].x + 8.0, cols[0].y + 6.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text("Humidity", Rect::new(cols[0].x + 8.0, cols[0].y + 6.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
         ui.c.text(&format!("{}%", w.humidity), Rect::new(cols[0].x + 8.0, cols[0].y + 20.0, cols[0].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold));
 
         super::card::fill_box(ui, None, cols[1], 10.0, palette::SURFACE_HOVER);
-        ui.c.text("Angin", Rect::new(cols[1].x + 8.0, cols[1].y + 6.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text("Wind", Rect::new(cols[1].x + 8.0, cols[1].y + 6.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
         ui.c.text(&format!("{:.1} km/h", w.wind_speed), Rect::new(cols[1].x + 8.0, cols[1].y + 20.0, cols[1].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold));
 
         super::card::fill_box(ui, None, cols[2], 10.0, palette::SURFACE_HOVER);
-        ui.c.text("Sumber Data", Rect::new(cols[2].x + 8.0, cols[2].y + 6.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+        ui.c.text("Data Source", Rect::new(cols[2].x + 8.0, cols[2].y + 6.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
         ui.c.text("Open-Meteo", Rect::new(cols[2].x + 8.0, cols[2].y + 20.0, cols[2].w - 16.0, 18.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
     } else {
-        ui.c.text("Memuat cuaca real-time Open-Meteo...", Rect::new(inner.x, inner.y + 40.0, inner.w, 24.0), &TextStyle::body().color(palette::TEXT_DIM));
+        ui.c.text("Fetching real-time weather from Open-Meteo...", Rect::new(inner.x, inner.y + 40.0, inner.w, 24.0), &TextStyle::body().color(palette::TEXT_DIM));
     }
 }
 

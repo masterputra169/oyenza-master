@@ -19,6 +19,7 @@ pub const PRESET_CITIES: &[(&str, f64, f64)] = &[
     ("Yogya", -7.7956, 110.3695),
     ("Tokyo", 35.6762, 139.6503),
     ("Singapore", 1.3521, 103.8198),
+    ("London", 51.5074, -0.1278),
 ];
 
 pub fn height(_st: &AppState) -> f32 {
@@ -28,26 +29,31 @@ pub fn height(_st: &AppState) -> f32 {
 pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let card = super::card::pill_card(st, area);
     let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "weather");
+    let is_auto_device = st.store.weather_city.is_none();
 
     let current_city = st.store.weather_city.clone().unwrap_or_else(|| {
         if let Some(ref w) = st.weather.report {
             w.city.clone()
         } else {
-            "Jakarta".to_string()
+            "Device Location".to_string()
         }
     });
 
     let top_y = area.y;
 
     // Header row
-    let city_title = format!("📍 Cuaca Real-time · {current_city}");
+    let city_title = if is_auto_device {
+        format!("📍 Device Location · {current_city}")
+    } else {
+        format!("📍 Destination · {current_city}")
+    };
     ui.c.text(
         &city_title,
-        Rect::new(area.x, top_y, 220.0, 24.0),
+        Rect::new(area.x, top_y, 230.0, 24.0),
         &TextStyle::body().weight(Weight::Bold).color(st.accent),
     );
 
-    // Right header buttons: [Pin ke Notch] and [Refresh]
+    // Right header buttons: [Pin to Island] and [Refresh]
     let mut bx = area.right();
     let ref_w = 64.0;
     bx -= ref_w;
@@ -57,9 +63,9 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     }
 
     bx -= 6.0;
-    let pin_w = if is_pinned { 72.0 } else { 88.0 };
+    let pin_w = if is_pinned { 72.0 } else { 92.0 };
     bx -= pin_w;
-    let pin_label = if is_pinned { "📌 Pinned" } else { "Pin ke Notch" };
+    let pin_label = if is_pinned { "📌 Pinned" } else { "Pin to Island" };
     let pin_style = if is_pinned { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
     if ui.pill(wid("weather.pin"), Rect::new(bx, top_y, pin_w, 22.0), pin_label, None, pin_style).clicked {
         if is_pinned {
@@ -74,12 +80,24 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         st.save();
     }
 
-    // City Selector Pills (Horizontal)
+    // City Selector Pills (Horizontal): First is "📍 Auto (Device)", followed by destinations
     let city_y = top_y + 28.0;
     let chip_h = 22.0;
     let mut cx = area.x;
+
+    // Auto Device Chip
+    let auto_w = 96.0;
+    let auto_style = if is_auto_device { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
+    let auto_resp = ui.pill(wid("weather.city_auto"), Rect::new(cx, city_y, auto_w, chip_h), "Auto (Device)", None, auto_style);
+    if auto_resp.clicked && !is_auto_device {
+        st.store.weather_city = None;
+        st.weather.last_fetched = 0.0;
+        st.save();
+    }
+    cx += auto_w + 6.0;
+
     for (i, (name, _, _)) in PRESET_CITIES.iter().enumerate() {
-        let is_sel = current_city.eq_ignore_ascii_case(name);
+        let is_sel = !is_auto_device && current_city.eq_ignore_ascii_case(name);
         let chip_w = (name.len() as f32 * 7.5 + 16.0).max(44.0);
         if cx + chip_w > area.right() {
             break;
@@ -114,7 +132,7 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
             &TextStyle::display(),
         );
 
-        let sub_txt = format!("{} · Terasa {:.0}°C", w.condition(), w.feels_like);
+        let sub_txt = format!("{} · Feels like {:.0}°C", w.condition(), w.feels_like);
         ui.c.text(
             &sub_txt,
             Rect::new(hero_r.x + 16.0, hero_r.y + 52.0, 240.0, 20.0),
@@ -124,20 +142,20 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
         // Right summary badges
         let rw = 150.0;
         let rx = hero_r.right() - rw - 16.0;
-        let hum_str = format!("💧 Kelembaban: {}%", w.humidity);
+        let hum_str = format!("💧 Humidity: {}%", w.humidity);
         ui.c.text(&hum_str, Rect::new(rx, hero_r.y + 16.0, rw, 18.0), &TextStyle::footnote().weight(Weight::Semibold));
-        let wind_str = format!("💨 Angin: {:.1} km/h", w.wind_speed);
+        let wind_str = format!("💨 Wind: {:.1} km/h", w.wind_speed);
         ui.c.text(&wind_str, Rect::new(rx, hero_r.y + 36.0, rw, 18.0), &TextStyle::footnote().weight(Weight::Semibold));
-        let time_str = if w.is_day { "☀️ Siang Hari" } else { "🌙 Malam Hari" };
+        let time_str = if w.is_day { "☀️ Daytime" } else { "🌙 Nighttime" };
         ui.c.text(time_str, Rect::new(rx, hero_r.y + 56.0, rw, 18.0), &TextStyle::caption().color(palette::TEXT_DIM));
     } else {
         ui.c.text(
-            "Memuat data cuaca real-time Open-Meteo...",
+            "Fetching real-time weather from Open-Meteo...",
             Rect::new(hero_r.x + 16.0, hero_r.y + 24.0, hero_r.w - 32.0, 24.0),
             &TextStyle::body().color(palette::TEXT_DIM),
         );
         ui.c.text(
-            "Pilih kota di atas atau klik Refresh untuk memuat cuaca.",
+            "Select a destination city or Auto (Device) to update weather.",
             Rect::new(hero_r.x + 16.0, hero_r.y + 50.0, hero_r.w - 32.0, 20.0),
             &TextStyle::footnote().color(palette::TEXT_DIM),
         );
@@ -156,30 +174,30 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
             w.condition().to_string(),
         )
     } else {
-        ("-".into(), "-".into(), "-".into(), "Memuat".into())
+        ("-".into(), "-".into(), "-".into(), "Loading".into())
     };
 
     // Metric 1: Humidity
     super::card::fill_box(ui, card, cols[0], 10.0, palette::SURFACE_HOVER);
-    ui.c.text("Kelembaban", Rect::new(cols[0].x + 8.0, cols[0].y + 8.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Humidity", Rect::new(cols[0].x + 8.0, cols[0].y + 8.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
     ui.c.text(&hum_val, Rect::new(cols[0].x + 8.0, cols[0].y + 24.0, cols[0].w - 16.0, 22.0), &TextStyle::body().weight(Weight::Bold));
-    ui.c.text("Udara", Rect::new(cols[0].x + 8.0, cols[0].y + 48.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Relative air", Rect::new(cols[0].x + 8.0, cols[0].y + 48.0, cols[0].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 
     // Metric 2: Wind
     super::card::fill_box(ui, card, cols[1], 10.0, palette::SURFACE_HOVER);
-    ui.c.text("Kecepatan Angin", Rect::new(cols[1].x + 8.0, cols[1].y + 8.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Wind Speed", Rect::new(cols[1].x + 8.0, cols[1].y + 8.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
     ui.c.text(&wind_val, Rect::new(cols[1].x + 8.0, cols[1].y + 24.0, cols[1].w - 16.0, 22.0), &TextStyle::body().weight(Weight::Bold));
-    ui.c.text("10m dari tanah", Rect::new(cols[1].x + 8.0, cols[1].y + 48.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("10m altitude", Rect::new(cols[1].x + 8.0, cols[1].y + 48.0, cols[1].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 
     // Metric 3: Feels like
     super::card::fill_box(ui, card, cols[2], 10.0, palette::SURFACE_HOVER);
-    ui.c.text("Suhu Terasa", Rect::new(cols[2].x + 8.0, cols[2].y + 8.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Feels Like", Rect::new(cols[2].x + 8.0, cols[2].y + 8.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
     ui.c.text(&feels_val, Rect::new(cols[2].x + 8.0, cols[2].y + 24.0, cols[2].w - 16.0, 22.0), &TextStyle::body().weight(Weight::Bold));
-    ui.c.text("Indeks panas", Rect::new(cols[2].x + 8.0, cols[2].y + 48.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Heat index", Rect::new(cols[2].x + 8.0, cols[2].y + 48.0, cols[2].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 
-    // Metric 4: Kondisi / API
+    // Metric 4: Condition / API
     super::card::fill_box(ui, card, cols[3], 10.0, palette::SURFACE_HOVER);
-    ui.c.text("Kondisi", Rect::new(cols[3].x + 8.0, cols[3].y + 8.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Condition", Rect::new(cols[3].x + 8.0, cols[3].y + 8.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
     ui.c.text(&cond_val, Rect::new(cols[3].x + 8.0, cols[3].y + 24.0, cols[3].w - 16.0, 22.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
     ui.c.text("Open-Meteo", Rect::new(cols[3].x + 8.0, cols[3].y + 48.0, cols[3].w - 16.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
 }

@@ -12,7 +12,7 @@ use poni_core::weather::WeatherReport;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USER_AGENT: &str = concat!("OyenzaStudio/", env!("CARGO_PKG_VERSION"), " (+https://github.com/masterputra169/oyenza-master)");
+const USER_AGENT: &str = "OyenzaStudio/0.2.21";
 const TIMEOUT: Duration = Duration::from_secs(8);
 const REFRESH_GAP: Duration = Duration::from_secs(900); // 15 minutes
 
@@ -113,8 +113,6 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             continue;
         }
 
-        last_coords = (watch.lat, watch.lng);
-
         let url = format!(
             "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m",
             watch.lat, watch.lng
@@ -124,19 +122,33 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         let mut success = false;
         if let Some(ref client) = http {
-            if let Ok(resp) = client.get(&url, TIMEOUT) {
-                if resp.status == 200 {
-                    if let Ok(report) = WeatherReport::from_json(&watch.city, &resp.body, now_unix) {
-                        sink.send(AppEvent::Weather(report));
-                        success = true;
+            match client.get(&url, TIMEOUT) {
+                Ok(resp) => {
+                    if resp.status == 200 {
+                        match WeatherReport::from_json(&watch.city, &resp.body, now_unix) {
+                            Ok(report) => {
+                                crate::pinfo!("weather: fetched {} ({:.1}°C, {})", watch.city, report.temp, report.condition());
+                                sink.send(AppEvent::Weather(report));
+                                success = true;
+                            }
+                            Err(e) => crate::pwarn!("weather: json parse error for {}: {e}", watch.city),
+                        }
+                    } else {
+                        crate::pwarn!("weather: HTTP status {} from {url}", resp.status);
                     }
                 }
+                Err(e) => crate::pwarn!("weather: HTTP fetch error from {url}: {e}"),
             }
+        } else {
+            crate::pwarn!("weather: no HTTP client available");
         }
+
         if success {
+            last_coords = (watch.lat, watch.lng);
             last_ask = Instant::now();
         } else {
-            // On failure, retry in 15 seconds instead of waiting full 15 minutes
+            // Keep last_coords as (0.0, 0.0) so next wake or 15s retry triggers
+            last_coords = (0.0, 0.0);
             last_ask = Instant::now() - REFRESH_GAP + Duration::from_secs(15);
         }
     }

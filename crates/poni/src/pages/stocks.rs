@@ -221,12 +221,12 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let cols = switch_rect.columns(2, 6.0);
     let is_forex = st.ui.stocks_forex_mode;
 
-    let btn_stocks = ui.pill(wid("stocks.tab_idx"), cols[0], "Saham IDX", None, if !is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    let btn_stocks = ui.pill(wid("stocks.tab_idx"), cols[0], "IDX Stocks", None, if !is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
     if btn_stocks.clicked {
         st.ui.stocks_forex_mode = false;
     }
 
-    let btn_forex = ui.pill(wid("stocks.tab_forex"), cols[1], "Kurs & Emas", None, if is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    let btn_forex = ui.pill(wid("stocks.tab_forex"), cols[1], "Forex & Commodities", None, if is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
     if btn_forex.clicked {
         st.ui.stocks_forex_mode = true;
     }
@@ -858,7 +858,7 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     if bell_resp.clicked {
         if has_alert {
             st.store.alerts.retain(|a| !(a.source == "stocks" && a.code.eq_ignore_ascii_case(&pick)));
-            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Notifikasi target {} dimatikan", pick), 3.0, None);
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Removed", &format!("Price alert for {} disabled", pick), 3.0, None);
         } else if let Some(cur_q) = st.stocks.board.as_ref().and_then(|b| b.quote(&pick)) {
             let target = if cur_q.price > 0.0 { (cur_q.price * 1.05).round() } else { 1.0 };
             let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
@@ -871,7 +871,7 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
                 triggered: false,
                 enabled: true,
             });
-            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus Rp {:.0}", pick, target), 4.0, None);
+            st.notify(Icon::Bell, st.accent, "Price Alert Set!", &format!("{}: Alert when price reaches Rp {:.0}", pick, target), 4.0, None);
         }
         st.save();
     }
@@ -1201,6 +1201,30 @@ fn lerp_color(a: Option<Color>, b: Option<Color>, t: f32) -> Color {
     }
 }
 
+fn mini_forex_chart(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
+    if q.spark.len() < 2 {
+        return;
+    }
+    let vals: Vec<f64> = q.spark.iter().map(|p| f64::from(p.1)).collect();
+    let lo = vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if hi <= lo {
+        return;
+    }
+    let n = (q.spark.len() - 1) as f32;
+    let px: Vec<(f32, f32)> = q.spark.iter().enumerate().map(|(i, p)| {
+        let x = r.x + (i as f32 / n) * r.w;
+        let y = r.bottom() - ((f64::from(p.1) - lo) / (hi - lo)) as f32 * r.h;
+        (x, y)
+    }).collect();
+    let col = match q.trend() {
+        1 => palette::GREEN,
+        -1 => palette::RED,
+        _ => palette::TEXT_DIM,
+    };
+    draw_line(ui, &px, col, r.y, r.bottom(), 1.4, Some(0.18));
+}
+
 fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let board = st.forex.board.clone();
     let card = super::card::pill_card(st, r);
@@ -1217,7 +1241,7 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect) {
         poni_core::forex::ForexBoard::from_rates(&def_rates, Some(3900.0), 0).quotes
     };
 
-    let item_h = 40.0;
+    let item_h = 42.0;
     let mut clicked_sym = None;
     for (i, q) in quotes.iter().enumerate() {
         let yr = r.y + i as f32 * item_h;
@@ -1240,7 +1264,11 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect) {
         let sym_st = TextStyle::footnote().weight(Weight::Bold);
         let name_st = TextStyle::caption().color(palette::TEXT_DIM);
         ui.c.text(&q.symbol, Rect::new(cell.x + 8.0, cell.y + 3.0, 95.0, 16.0), &sym_st);
-        ui.c.text(&q.name, Rect::new(cell.x + 8.0, cell.y + 19.0, 110.0, 16.0), &name_st);
+        ui.c.text(&q.name, Rect::new(cell.x + 8.0, cell.y + 20.0, 95.0, 16.0), &name_st);
+
+        // Mini sparkline in each row
+        let spark_r = Rect::new(cell.x + 104.0, cell.y + 11.0, 50.0, 20.0);
+        mini_forex_chart(ui, q, spark_r);
 
         let price_str = q.formatted_rate();
         let price_st = TextStyle::footnote().tabular().weight(Weight::Semibold);
@@ -1256,7 +1284,7 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect) {
         };
         let pct_st = TextStyle::caption().tabular().weight(Weight::Bold).color(col);
         let cw = ui.c.measure(&pct_str, &pct_st, 80.0).0.ceil();
-        ui.c.text(&pct_str, Rect::new(cell.right() - cw - 8.0, cell.y + 19.0, cw + 2.0, 16.0), &pct_st);
+        ui.c.text(&pct_str, Rect::new(cell.right() - cw - 8.0, cell.y + 20.0, cw + 2.0, 16.0), &pct_st);
     }
 
     if let Some(sym) = clicked_sym {
@@ -1268,18 +1296,20 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let pick = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
     let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "forex" && t.code.to_ascii_uppercase() == pick.to_ascii_uppercase());
 
-    let (rate_str, name, pct, trend, unit) = if let Some(q) = st.forex.board.as_ref().and_then(|b| b.quote(&pick)) {
-        (q.formatted_rate(), q.name.clone(), q.change_pct, q.trend(), q.unit.clone())
+    let q_opt = st.forex.board.as_ref().and_then(|b| b.quote(&pick)).cloned();
+    let (rate_str, name, pct, trend, unit, rate_val, low_val, high_val) = if let Some(ref q) = q_opt {
+        (q.formatted_rate(), q.name.clone(), q.change_pct, q.trend(), q.unit.clone(), q.rate, q.low, q.high)
     } else {
-        ("Rp 18.132".into(), "US Dollar".into(), 0.12, 1, "per 1 USD".into())
+        ("Rp 18.132".into(), "US Dollar".into(), 0.12, 1, "per 1 USD".into(), 18132.0, 18050.0, 18210.0)
     };
 
-    // Header & Pin
+    // Header: Symbol, Name
     let title_st = TextStyle::headline().weight(Weight::Bold);
     let name_st = TextStyle::footnote().color(palette::TEXT_DIM);
-    ui.c.text(&pick, Rect::new(r.x, r.y, 160.0, 22.0), &title_st);
-    ui.c.text(&name, Rect::new(r.x, r.y + 22.0, 180.0, 18.0), &name_st);
+    ui.c.text(&pick, Rect::new(r.x, r.y, 140.0, 22.0), &title_st);
+    ui.c.text(&name, Rect::new(r.x, r.y + 22.0, 160.0, 18.0), &name_st);
 
+    // Right action buttons: [1D 1M 6M 1Y], [Alert], [Pin]
     let pin_w = if is_pinned { 72.0 } else { 60.0 };
     let pin_label = if is_pinned { "Pinned" } else { "Pin" };
     let pin_icon = if is_pinned { Some(Icon::PinFill) } else { Some(Icon::Pin) };
@@ -1304,9 +1334,9 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     if ui.pill(wid("forex.alert"), Rect::new(r.right() - pin_w - alert_w - 6.0, r.y, alert_w, 24.0), alert_label, Some(Icon::Bell), alert_style).clicked {
         if has_alert {
             st.store.alerts.retain(|a| !(a.source == "forex" && a.code.to_ascii_uppercase() == pick.to_ascii_uppercase()));
-            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Target {} dimatikan", pick), 3.0, None);
-        } else if let Some(q) = st.forex.board.as_ref().and_then(|b| b.quote(&pick)) {
-            let target = if q.rate > 0.0 { (q.rate * 1.02 * 100.0).round() / 100.0 } else { 1.0 };
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Removed", &format!("Price alert for {} disabled", pick), 3.0, None);
+        } else {
+            let target = if rate_val > 0.0 { (rate_val * 1.02 * 100.0).round() / 100.0 } else { 1.0 };
             let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
             st.store.alerts.push(poni_core::store::PriceAlert {
                 id: now_id,
@@ -1317,14 +1347,23 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
                 triggered: false,
                 enabled: true,
             });
-            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus {}", pick, q.formatted_rate()), 4.0, None);
+            st.notify(Icon::Bell, st.accent, "Price Alert Set!", &format!("{}: Alert when price reaches {}", pick, rate_str), 4.0, None);
         }
         st.save();
     }
 
-    // Big Price
+    // Range selector: 1D, 1M, 6M, 1Y
+    let range = st.store.stocks.range;
+    let range_w = 140.0;
+    let range_r = Rect::new(r.right() - pin_w - alert_w - range_w - 12.0, r.y, range_w, 24.0);
+    if let Some(r_pick) = range_control(ui, range_r, range) {
+        st.store.stocks.range = r_pick;
+        st.save();
+    }
+
+    // Big Price & Percentage
     let price_st = TextStyle::display();
-    ui.c.text(&rate_str, Rect::new(r.x, r.y + 48.0, r.w, 42.0), &price_st);
+    ui.c.text(&rate_str, Rect::new(r.x, r.y + 44.0, r.w, 36.0), &price_st);
 
     let sign = if pct >= 0.0 { "+" } else { "" };
     let col = match trend {
@@ -1333,28 +1372,108 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         _ => palette::TEXT_DIM,
     };
     let sub = format!("{sign}{pct:.2}% · {unit}");
-    ui.c.text(&sub, Rect::new(r.x, r.y + 90.0, r.w, 20.0), &TextStyle::footnote().weight(Weight::Semibold).color(col));
+    ui.c.text(&sub, Rect::new(r.x, r.y + 80.0, r.w, 18.0), &TextStyle::footnote().weight(Weight::Semibold).color(col));
 
-    // Metric tiles
-    let my = r.y + 118.0;
-    let mh = (r.bottom() - my).max(80.0);
-    let rows = Rect::new(r.x, my, r.w, mh).rows(2, 8.0);
+    // Interactive Bezier Chart
+    let chart_y = r.y + 100.0;
+    let chart_h = 74.0;
+    let chart = Rect::new(r.x, chart_y, r.w, chart_h);
 
-    let row1 = rows[0].columns(2, 8.0);
-    super::card::fill_box(ui, None, row1[0], 12.0, palette::SURFACE);
-    ui.c.text("Satuan Transaksi", Rect::new(row1[0].x + 10.0, row1[0].y + 6.0, row1[0].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
-    ui.c.text(&unit, Rect::new(row1[0].x + 10.0, row1[0].y + 22.0, row1[0].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold));
+    let (pts_data, prev_val) = match range {
+        Range::Day => {
+            let spark_pts: Vec<(f32, f64)> = if let Some(ref q) = q_opt {
+                let n = (q.spark.len().saturating_sub(1)).max(1) as f32;
+                q.spark.iter().enumerate().map(|(i, p)| (i as f32 / n, f64::from(p.1))).collect()
+            } else {
+                Vec::new()
+            };
+            let prev = q_opt.as_ref().map_or(rate_val, |q| q.prev_close);
+            (spark_pts, prev)
+        }
+        _ => {
+            let days_back = match range {
+                Range::Month => 30,
+                Range::HalfYear => 180,
+                Range::Year => 365,
+                Range::Day => 1,
+            };
+            let today = poni_core::forex::today_num();
+            let hist = poni_core::forex::sample_history(&pick, today, rate_val);
+            let filtered: Vec<(i32, f64)> = hist.closes.into_iter().filter(|(d, _)| *d >= today - days_back).collect();
+            let n = (filtered.len().saturating_sub(1)).max(1) as f32;
+            let first_val = filtered.first().map_or(rate_val, |p| p.1);
+            let pts: Vec<(f32, f64)> = filtered.iter().enumerate().map(|(i, p)| (i as f32 / n, p.1)).collect();
+            (pts, first_val)
+        }
+    };
 
-    super::card::fill_box(ui, None, row1[1], 12.0, palette::SURFACE);
-    ui.c.text("Pasar & Spread", Rect::new(row1[1].x + 10.0, row1[1].y + 6.0, row1[1].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
-    ui.c.text("Spot ±0.5%", Rect::new(row1[1].x + 10.0, row1[1].y + 22.0, row1[1].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold));
+    let (lo, hi) = if pts_data.is_empty() {
+        (rate_val * 0.99, rate_val * 1.01)
+    } else {
+        let l = pts_data.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let h = pts_data.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        if (h - l).abs() < 1e-6 { (l * 0.99, h * 1.01) } else { (l, h) }
+    };
 
-    let row2 = rows[1].columns(2, 8.0);
-    super::card::fill_box(ui, None, row2[0], 12.0, palette::SURFACE);
-    ui.c.text("Status Pembaruan", Rect::new(row2[0].x + 10.0, row2[0].y + 6.0, row2[0].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
-    ui.c.text("Live Real-time", Rect::new(row2[0].x + 10.0, row2[0].y + 22.0, row2[0].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
+    let px: Vec<(f32, f32)> = pts_data.iter().map(|p| {
+        let x = chart.x + p.0 * chart.w;
+        let y = chart.bottom() - ((p.1 - lo) / (hi - lo)) as f32 * chart.h;
+        (x, y)
+    }).collect();
 
-    super::card::fill_box(ui, None, row2[1], 12.0, palette::SURFACE);
-    ui.c.text("Penyedia Data", Rect::new(row2[1].x + 10.0, row2[1].y + 6.0, row2[1].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
-    ui.c.text("ER-API & Binance", Rect::new(row2[1].x + 10.0, row2[1].y + 22.0, row2[1].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::TEXT_DIM));
+    let chart_color = if rate_val >= prev_val { palette::GREEN } else { palette::RED };
+    if px.len() >= 2 {
+        draw_line(ui, &px, chart_color, chart.y, chart.bottom() + 4.0, 2.0, Some(0.25));
+    }
+
+    // Hover scrubbing on chart
+    let scrub = ui.input.mouse.filter(|p| chart.inset(-4.0, -6.0).contains(*p) && px.len() >= 2).map(|p| {
+        let x = ((p.x - chart.x) / chart.w).clamp(0.0, 1.0);
+        let n = (px.len() - 1) as f32;
+        let idx = (x * n).round() as usize;
+        let val = pts_data.get(idx).map_or(rate_val, |p| p.1);
+        (x, val)
+    });
+
+    if let Some((sx, s_val)) = scrub {
+        let cx = chart.x + sx * chart.w;
+        ui.c.line(Point::new(cx, chart.y - 2.0), Point::new(cx, chart.bottom()), Color::white(0.32), 1.0);
+        let s_str = if pick == "MINYAK" {
+            format!("${:.2}", s_val)
+        } else if pick == "PERAK" {
+            format!("{} /gr", poni_core::forex::fmt_idr(s_val, false))
+        } else {
+            poni_core::forex::fmt_idr(s_val, pick == "EMAS")
+        };
+        let s_st = TextStyle::caption().weight(Weight::Bold).color(palette::TEXT);
+        let sw = ui.c.measure(&s_str, &s_st, 120.0).0.ceil();
+        let bx = (cx - sw / 2.0).clamp(chart.x, chart.right() - sw);
+        ui.c.fill_rrect(Rect::new(bx - 4.0, chart.y - 18.0, sw + 8.0, 16.0), 4.0, palette::SURFACE);
+        ui.c.text(&s_str, Rect::new(bx, chart.y - 18.0, sw, 16.0), &s_st);
+    }
+
+    // Metric tiles under the chart
+    let my = chart.bottom() + 8.0;
+    let mh = (r.bottom() - my).max(56.0);
+    let rows = Rect::new(r.x, my, r.w, mh).rows(2, 6.0);
+
+    let row1 = rows[0].columns(2, 6.0);
+    super::card::fill_box(ui, None, row1[0], 10.0, palette::SURFACE);
+    ui.c.text("24h High", Rect::new(row1[0].x + 8.0, row1[0].y + 4.0, row1[0].w - 16.0, 13.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    let high_str = if pick == "MINYAK" { format!("${:.2}", high_val) } else { poni_core::forex::fmt_idr(high_val, pick == "EMAS") };
+    ui.c.text(&high_str, Rect::new(row1[0].x + 8.0, row1[0].y + 17.0, row1[0].w - 16.0, 16.0), &TextStyle::footnote().weight(Weight::Bold));
+
+    super::card::fill_box(ui, None, row1[1], 10.0, palette::SURFACE);
+    ui.c.text("24h Low", Rect::new(row1[1].x + 8.0, row1[1].y + 4.0, row1[1].w - 16.0, 13.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    let low_str = if pick == "MINYAK" { format!("${:.2}", low_val) } else { poni_core::forex::fmt_idr(low_val, pick == "EMAS") };
+    ui.c.text(&low_str, Rect::new(row1[1].x + 8.0, row1[1].y + 17.0, row1[1].w - 16.0, 16.0), &TextStyle::footnote().weight(Weight::Bold));
+
+    let row2 = rows[1].columns(2, 6.0);
+    super::card::fill_box(ui, None, row2[0], 10.0, palette::SURFACE);
+    ui.c.text("Unit", Rect::new(row2[0].x + 8.0, row2[0].y + 4.0, row2[0].w - 16.0, 13.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text(&unit, Rect::new(row2[0].x + 8.0, row2[0].y + 17.0, row2[0].w - 16.0, 16.0), &TextStyle::footnote().weight(Weight::Bold));
+
+    super::card::fill_box(ui, None, row2[1], 10.0, palette::SURFACE);
+    ui.c.text("Market & Source", Rect::new(row2[1].x + 8.0, row2[1].y + 4.0, row2[1].w - 16.0, 13.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("OpenER & Binance", Rect::new(row2[1].x + 8.0, row2[1].y + 17.0, row2[1].w - 16.0, 16.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::TEXT_DIM));
 }
