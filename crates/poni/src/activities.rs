@@ -308,6 +308,25 @@ pub fn active_ticker_info(st: &AppState) -> Option<(String, String, Option<Color
         } else {
             Some((city, "Loading...".into(), Some(palette::TEXT_DIM)))
         }
+    } else if pin.source == "forex" {
+        let sym = pin.code.to_ascii_uppercase();
+        let q = st.forex.board.as_ref().and_then(|b| b.quote(&sym));
+        if let Some(q) = q {
+            let val_str = if q.is_gold {
+                format!("{:.3}jt/gr", q.rate / 1_000_000.0)
+            } else {
+                let sign = if q.change_pct >= 0.0 { "+" } else { "" };
+                format!("{} {sign}{:.1}%", q.formatted_rate(), q.change_pct)
+            };
+            let col = match q.trend() {
+                1 => Some(palette::GREEN),
+                -1 => Some(palette::RED),
+                _ => Some(palette::TEXT_DIM),
+            };
+            Some((q.symbol.clone(), val_str, col))
+        } else {
+            Some((sym, "\u{2014}".to_string(), Some(palette::TEXT_DIM)))
+        }
     } else {
         None
     }

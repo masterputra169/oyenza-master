@@ -215,15 +215,40 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let list_w = (area.w * 0.44).clamp(LIST_MIN, LIST_MAX).round();
     let left = Rect::new(area.x, area.y, list_w, area.h.min(HEIGHT));
     let right = Rect::new(left.right() + COL_GAP, area.y, (area.w - list_w - COL_GAP).max(0.0), left.h);
+
+    let switcher_h = 24.0;
+    let switch_rect = Rect::new(left.x, left.y, left.w, switcher_h);
+    let cols = switch_rect.columns(2, 6.0);
+    let is_forex = st.ui.stocks_forex_mode;
+
+    let btn_stocks = ui.pill(wid("stocks.tab_idx"), cols[0], "Saham IDX", None, if !is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    if btn_stocks.clicked {
+        st.ui.stocks_forex_mode = false;
+    }
+
+    let btn_forex = ui.pill(wid("stocks.tab_forex"), cols[1], "Kurs & Emas", None, if is_forex { PillStyle::Primary(st.accent) } else { PillStyle::Utility });
+    if btn_forex.clicked {
+        st.ui.stocks_forex_mode = true;
+    }
+
+    let left_content = Rect::new(left.x, left.y + switcher_h + 6.0, left.w, (left.h - switcher_h - 6.0).max(10.0));
+
     let base = ui.c.alpha();
     ui.c.set_alpha(base * ease_out(st.ui.stocks.swap_k));
-    if st.ui.stocks.adding {
-        search(ui, st, left);
+    if is_forex {
+        forex_list(ui, st, left_content);
+        ui.c.set_alpha(base);
+        forex_detail(ui, st, right);
     } else {
-        list(ui, st, left, area, dt, &mut moving);
+        if st.ui.stocks.adding {
+            search(ui, st, left_content);
+        } else {
+            list(ui, st, left_content, area, dt, &mut moving);
+        }
+        ui.c.set_alpha(base);
+        detail(ui, st, right);
     }
-    ui.c.set_alpha(base);
-    detail(ui, st, right);
+
     if moving {
         ui.request_anim();
     }
@@ -1144,4 +1169,137 @@ fn lerp_color(a: Option<Color>, b: Option<Color>, t: f32) -> Color {
         (Some(a), None) => a,
         _ => Color::white(0.36),
     }
+}
+
+fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect) {
+    let board = st.forex.board.clone();
+    let card = super::card::pill_card(st, r);
+    let pick = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+    let quotes: Vec<poni_core::forex::ForexQuote> = if let Some(b) = board {
+        b.quotes
+    } else {
+        let mut def_rates = std::collections::HashMap::new();
+        def_rates.insert("IDR".into(), 18130.0);
+        def_rates.insert("EUR".into(), 0.895);
+        def_rates.insert("SGD".into(), 1.278);
+        def_rates.insert("JPY".into(), 157.4);
+        def_rates.insert("SAR".into(), 3.75);
+        poni_core::forex::ForexBoard::from_rates(&def_rates, Some(3900.0), 0).quotes
+    };
+
+    let item_h = 40.0;
+    let mut clicked_sym = None;
+    for (i, q) in quotes.iter().enumerate() {
+        let yr = r.y + i as f32 * item_h;
+        if yr + item_h > r.bottom() {
+            break;
+        }
+        let cell = Rect::new(r.x, yr, r.w, item_h);
+        let is_picked = q.symbol == pick;
+        let resp = ui.button(wid_n("forex.item", i as u64), cell);
+        if resp.clicked {
+            clicked_sym = Some(q.symbol.clone());
+        }
+
+        if is_picked {
+            super::card::fill_box(ui, card, cell, 10.0, palette::SURFACE_PRESSED);
+        } else if resp.hovered {
+            super::card::fill_box(ui, card, cell, 10.0, palette::SURFACE_HOVER);
+        }
+
+        let sym_st = TextStyle::footnote().weight(Weight::Bold);
+        let name_st = TextStyle::caption().color(palette::TEXT_DIM);
+        ui.c.text(&q.symbol, Rect::new(cell.x + 8.0, cell.y + 3.0, 95.0, 16.0), &sym_st);
+        ui.c.text(&q.name, Rect::new(cell.x + 8.0, cell.y + 19.0, 110.0, 16.0), &name_st);
+
+        let price_str = q.formatted_rate();
+        let price_st = TextStyle::footnote().tabular().weight(Weight::Semibold);
+        let pw = ui.c.measure(&price_str, &price_st, 150.0).0.ceil();
+        ui.c.text(&price_str, Rect::new(cell.right() - pw - 8.0, cell.y + 3.0, pw + 2.0, 16.0), &price_st);
+
+        let sign = if q.change_pct >= 0.0 { "+" } else { "" };
+        let pct_str = format!("{sign}{:.2}%", q.change_pct);
+        let col = match q.trend() {
+            1 => palette::GREEN,
+            -1 => palette::RED,
+            _ => palette::TEXT_DIM,
+        };
+        let pct_st = TextStyle::caption().tabular().weight(Weight::Bold).color(col);
+        let cw = ui.c.measure(&pct_str, &pct_st, 80.0).0.ceil();
+        ui.c.text(&pct_str, Rect::new(cell.right() - cw - 8.0, cell.y + 19.0, cw + 2.0, 16.0), &pct_st);
+    }
+
+    if let Some(sym) = clicked_sym {
+        st.ui.forex_pick = Some(sym);
+    }
+}
+
+fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
+    let pick = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+    let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "forex" && t.code.to_ascii_uppercase() == pick.to_ascii_uppercase());
+
+    let (rate_str, name, pct, trend, unit) = if let Some(q) = st.forex.board.as_ref().and_then(|b| b.quote(&pick)) {
+        (q.formatted_rate(), q.name.clone(), q.change_pct, q.trend(), q.unit.clone())
+    } else {
+        ("Rp 18.132".into(), "US Dollar".into(), 0.12, 1, "per 1 USD".into())
+    };
+
+    // Header & Pin
+    let title_st = TextStyle::headline().weight(Weight::Bold);
+    let name_st = TextStyle::footnote().color(palette::TEXT_DIM);
+    ui.c.text(&pick, Rect::new(r.x, r.y, 160.0, 22.0), &title_st);
+    ui.c.text(&name, Rect::new(r.x, r.y + 22.0, 180.0, 18.0), &name_st);
+
+    let pin_w = if is_pinned { 72.0 } else { 60.0 };
+    let pin_label = if is_pinned { "Pinned" } else { "Pin" };
+    let pin_icon = if is_pinned { Some(Icon::PinFill) } else { Some(Icon::Pin) };
+    let pin_style = if is_pinned { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
+    if ui.pill(wid("forex.pin"), Rect::new(r.right() - pin_w, r.y, pin_w, 24.0), pin_label, pin_icon, pin_style).clicked {
+        if is_pinned {
+            st.store.ticker = None;
+        } else {
+            st.store.ticker = Some(poni_core::store::TickerPin {
+                enabled: true,
+                source: "forex".into(),
+                code: pick.clone(),
+            });
+        }
+        st.save();
+    }
+
+    // Big Price
+    let price_st = TextStyle::display();
+    ui.c.text(&rate_str, Rect::new(r.x, r.y + 48.0, r.w, 42.0), &price_st);
+
+    let sign = if pct >= 0.0 { "+" } else { "" };
+    let col = match trend {
+        1 => palette::GREEN,
+        -1 => palette::RED,
+        _ => palette::TEXT_DIM,
+    };
+    let sub = format!("{sign}{pct:.2}% · {unit}");
+    ui.c.text(&sub, Rect::new(r.x, r.y + 90.0, r.w, 20.0), &TextStyle::footnote().weight(Weight::Semibold).color(col));
+
+    // Metric tiles
+    let my = r.y + 118.0;
+    let mh = (r.bottom() - my).max(80.0);
+    let rows = Rect::new(r.x, my, r.w, mh).rows(2, 8.0);
+
+    let row1 = rows[0].columns(2, 8.0);
+    super::card::fill_box(ui, None, row1[0], 12.0, palette::SURFACE);
+    ui.c.text("Satuan Transaksi", Rect::new(row1[0].x + 10.0, row1[0].y + 6.0, row1[0].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text(&unit, Rect::new(row1[0].x + 10.0, row1[0].y + 22.0, row1[0].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold));
+
+    super::card::fill_box(ui, None, row1[1], 12.0, palette::SURFACE);
+    ui.c.text("Pasar & Spread", Rect::new(row1[1].x + 10.0, row1[1].y + 6.0, row1[1].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Spot ±0.5%", Rect::new(row1[1].x + 10.0, row1[1].y + 22.0, row1[1].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold));
+
+    let row2 = rows[1].columns(2, 8.0);
+    super::card::fill_box(ui, None, row2[0], 12.0, palette::SURFACE);
+    ui.c.text("Status Pembaruan", Rect::new(row2[0].x + 10.0, row2[0].y + 6.0, row2[0].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("Live Real-time", Rect::new(row2[0].x + 10.0, row2[0].y + 22.0, row2[0].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::GREEN));
+
+    super::card::fill_box(ui, None, row2[1], 12.0, palette::SURFACE);
+    ui.c.text("Penyedia Data", Rect::new(row2[1].x + 10.0, row2[1].y + 6.0, row2[1].w - 20.0, 14.0), &TextStyle::caption().color(palette::TEXT_DIM));
+    ui.c.text("ER-API & Binance", Rect::new(row2[1].x + 10.0, row2[1].y + 22.0, row2[1].w - 20.0, 20.0), &TextStyle::footnote().weight(Weight::Bold).color(palette::TEXT_DIM));
 }

@@ -334,6 +334,10 @@ pub struct PageUiState {
     pub today_drawn: f64,
     /// Shows weather view instead of stats in Today page tiles.
     pub today_weather: bool,
+    /// Shows Forex & Gold instead of stocks list in Stocks page.
+    pub stocks_forex_mode: bool,
+    /// Picked Forex symbol (e.g. "USD/IDR", "EMAS").
+    pub forex_pick: Option<String>,
     /// Smoothly animated lyric scroll position (line index as float).
     pub lyric_pos: f32,
     pub lyric_track: String,
@@ -611,6 +615,13 @@ pub struct WeatherState {
     pub last_fetched: f64,
 }
 
+/// Real-time Forex & Gold state.
+#[derive(Clone, Debug, Default)]
+pub struct ForexState {
+    pub board: Option<poni_core::forex::ForexBoard>,
+    pub last_fetched: f64,
+}
+
 /// The Prayer times add-on's live state.
 #[derive(Clone, Debug, Default)]
 pub struct PrayerState {
@@ -872,6 +883,8 @@ pub struct AppState {
     pub crypto: CryptoState,
     /// Real-time weather from Open-Meteo.
     pub weather: WeatherState,
+    /// Real-time Forex & Gold.
+    pub forex: ForexState,
     /// The Downloads page's jobs (`poni_core::downloads`), in memory only.
     pub downloads: poni_core::downloads::Jobs,
     /// This app offers the Downloader: Windows outside the Microsoft Store
@@ -963,6 +976,7 @@ impl AppState {
             stocks: StocksState::default(),
             crypto: CryptoState::default(),
             weather: WeatherState::default(),
+            forex: ForexState::default(),
             downloads: poni_core::downloads::Jobs::default(),
             downloader_offered: false,
             rec: RecView::default(),

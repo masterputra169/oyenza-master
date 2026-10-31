@@ -525,6 +525,9 @@ pub struct App {
     /// Weather service and state (`set_weather_watch`).
     weather: Option<services::weather::WeatherService>,
     weather_open: bool,
+    /// Forex service and state (`set_forex_watch`).
+    forex: Option<services::forex::ForexService>,
+    forex_open: bool,
     /// The AI tab's worker: started the first time the tab opens or its
     /// notices are on (`set_usage_watch`).
     usage: Option<services::usage::UsageService>,
@@ -673,6 +676,8 @@ impl App {
             crypto_open: false,
             weather: None,
             weather_open: false,
+            forex: None,
+            forex_open: false,
             usage: None,
             usage_watch: services::usage::Watch::default(),
             updater: None,
@@ -1567,6 +1572,7 @@ impl App {
         self.set_stocks_watch();
         self.set_crypto_watch();
         self.set_weather_watch();
+        self.set_forex_watch();
         self.set_usage_watch();
         self.apply_fullscreen();
     }
@@ -1801,6 +1807,11 @@ impl App {
             AppEvent::Weather(report) => {
                 self.st.weather.report = Some(report);
                 self.st.weather.last_fetched = self.st.now;
+                self.request_frame();
+            }
+            AppEvent::Forex(board) => {
+                self.st.forex.board = Some(board);
+                self.st.forex.last_fetched = self.st.now;
                 self.request_frame();
             }
             AppEvent::Usage(ev) => self.on_usage(ev),
@@ -2986,6 +2997,26 @@ impl App {
         }
     }
 
+    fn set_forex_watch(&mut self) {
+        let away = self.away.0 || self.away.1;
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "forex");
+        let open = (self.mode == Mode::Expanded(PageKind::Stocks) || ticker_active) && !away && !self.st.power.saver;
+        if !open && !self.forex_open {
+            return;
+        }
+        self.forex_open = open;
+        let w = services::forex::Watch { open };
+        if self.forex.is_none() && w.open {
+            match services::forex::ForexService::start(self.sink.clone()) {
+                Ok(s) => self.forex = Some(s),
+                Err(e) => pwarn!("service forex: unavailable ({e})"),
+            }
+        }
+        if let Some(s) = &self.forex {
+            s.watch(w);
+        }
+    }
+
     /// The Today page came on screen or went: the worker asks for the day only meanwhile.
     fn set_today_watch(&mut self, on: bool) {
         if on != self.today_watch {
@@ -3535,6 +3566,7 @@ impl App {
         self.set_stocks_watch();
         self.set_crypto_watch();
         self.set_weather_watch();
+        self.set_forex_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge (below the menu
         // bar for what hangs under a notch).

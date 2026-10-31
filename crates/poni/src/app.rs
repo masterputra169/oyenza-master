@@ -478,6 +478,8 @@ pub struct App {
     crypto_open: bool,
     /// Weather is active or on screen at the last look (`set_weather_watch`).
     weather_open: bool,
+    /// Forex is active or on screen at the last look (`set_forex_watch`).
+    forex_open: bool,
     /// The Today page is on screen: the worker asks for the day (`services::oyenza`).
     today_watch: bool,
     /// What the AI tab's worker was last told (`set_usage_watch`).
@@ -713,6 +715,7 @@ impl App {
             stocks_open: false,
             crypto_open: false,
             weather_open: false,
+            forex_open: false,
             today_watch: false,
             usage_watch: services::usage::Watch::default(),
             frames: None,
@@ -1382,6 +1385,7 @@ impl App {
                 self.set_stocks_watch();
                 self.set_crypto_watch();
                 self.set_weather_watch();
+                self.set_forex_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -1401,6 +1405,7 @@ impl App {
                 self.set_stocks_watch();
                 self.set_crypto_watch();
                 self.set_weather_watch();
+                self.set_forex_watch();
                 self.set_usage_watch();
                 self.update_due();
                 self.request_frame();
@@ -1960,6 +1965,18 @@ impl App {
         };
         if let Some(s) = self.services.as_ref() {
             s.weather_watch(services::weather::Watch { open, lat, lng, city });
+        }
+    }
+
+    fn set_forex_watch(&mut self) {
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "forex");
+        let open = (self.mode == Mode::Expanded(PageKind::Stocks) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none();
+        if !open && !self.forex_open {
+            return;
+        }
+        self.forex_open = open;
+        if let Some(s) = self.services.as_ref() {
+            s.forex_watch(services::forex::Watch { open });
         }
     }
 
@@ -2682,6 +2699,11 @@ impl App {
             AppEvent::Weather(report) => {
                 self.st.weather.report = Some(report);
                 self.st.weather.last_fetched = self.st.now;
+                self.request_frame();
+            }
+            AppEvent::Forex(board) => {
+                self.st.forex.board = Some(board);
+                self.st.forex.last_fetched = self.st.now;
                 self.request_frame();
             }
             AppEvent::Notify(ev) => self.on_notify(ev),
@@ -3810,6 +3832,7 @@ impl App {
         self.set_stocks_watch();
         self.set_crypto_watch();
         self.set_weather_watch();
+        self.set_forex_watch();
         self.set_usage_watch();
         // The Pill theme floats the island below the top edge.
         self.island.set_floating(pill::on(self.st.settings.theme).then_some(pill::TOP_GAP));

@@ -150,6 +150,8 @@ pub enum AppEvent {
     Crypto(crate::services::crypto::CryptoEvent),
     /// Real-time Weather from Open-Meteo (`services::weather`).
     Weather(poni_core::weather::WeatherReport),
+    /// Real-time Forex and Gold prices (`services::forex`).
+    Forex(poni_core::forex::ForexBoard),
     /// The AI tab's readings, typed keys, inference.oyenza.com's link and
     /// heads-up notices (`services::usage`).
     Usage(crate::services::usage::UsageEvent),

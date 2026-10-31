@@ -75,6 +75,9 @@ pub mod crypto;
 // And Weather from Open-Meteo.
 #[path = "../services/weather.rs"]
 pub mod weather;
+// And Forex & Gold spot.
+#[path = "../services/forex.rs"]
+pub mod forex;
 // And the AI tab's worker (`studio_usage` does the reading).
 #[path = "../services/usage.rs"]
 pub mod usage;

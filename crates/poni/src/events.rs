@@ -182,6 +182,8 @@ pub enum AppEvent {
     Crypto(crate::services::crypto::CryptoEvent),
     /// Real-time Weather from Open-Meteo (`services::weather`).
     Weather(poni_core::weather::WeatherReport),
+    /// Real-time Forex and Gold prices (`services::forex`).
+    Forex(poni_core::forex::ForexBoard),
     /// One of yt-dlp's lines for download `id` (`services::downloader`).
     Download { id: u64, line: poni_core::ytdlp::Line },
     /// yt-dlp for download `id` ended (`ok`: it exited with 0).

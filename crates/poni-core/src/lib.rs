@@ -13,6 +13,7 @@ pub mod applemusic;
 pub mod datetime;
 pub mod crypto;
 pub mod downloads;
+pub mod forex;
 pub mod frames;
 pub mod frametime;
 pub mod geom;
