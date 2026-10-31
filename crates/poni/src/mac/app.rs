@@ -1802,8 +1802,14 @@ impl App {
             }
             AppEvent::Located(found) => self.on_located(found),
             AppEvent::Cities { file, got } => pages::prayer::cities_came(&mut self.st, file, got),
-            AppEvent::Stocks(ev) => self.st.stocks.apply(ev, self.st.unix),
-            AppEvent::Crypto(ev) => self.st.crypto.apply(ev),
+            AppEvent::Stocks(ev) => {
+                self.st.stocks.apply(ev, self.st.unix);
+                self.check_price_alerts();
+            }
+            AppEvent::Crypto(ev) => {
+                self.st.crypto.apply(ev);
+                self.check_price_alerts();
+            }
             AppEvent::Weather(report) => {
                 self.st.weather.report = Some(report);
                 self.st.weather.last_fetched = self.st.now;
@@ -1812,6 +1818,7 @@ impl App {
             AppEvent::Forex(board) => {
                 self.st.forex.board = Some(board);
                 self.st.forex.last_fetched = self.st.now;
+                self.check_price_alerts();
                 self.request_frame();
             }
             AppEvent::Usage(ev) => self.on_usage(ev),
@@ -3014,6 +3021,67 @@ impl App {
         }
         if let Some(s) = &self.forex {
             s.watch(w);
+        }
+    }
+
+    fn check_price_alerts(&mut self) {
+        if self.st.store.alerts.is_empty() {
+            return;
+        }
+        let mut save = false;
+        let mut notify_args = None;
+
+        for alert in &mut self.st.store.alerts {
+            if !alert.enabled || alert.triggered {
+                continue;
+            }
+            let current_price = match alert.source.as_str() {
+                "crypto" => self.st.crypto.board.as_ref().and_then(|b| b.quote(&alert.code)).map(|q| q.price),
+                "stocks" => self.st.stocks.board.as_ref().and_then(|b| b.quote(&alert.code)).map(|q| q.price as f64),
+                "forex" => self.st.forex.board.as_ref().and_then(|b| b.quote(&alert.code)).map(|q| q.rate),
+                _ => None,
+            };
+
+            let Some(price) = current_price else { continue };
+
+            let hit = if alert.above {
+                price >= alert.target_price
+            } else {
+                price <= alert.target_price
+            };
+
+            if hit {
+                alert.triggered = true;
+                save = true;
+                let dir = if alert.above { "naik menembus" } else { "turun menembus" };
+                let col = if alert.above { palette::GREEN } else { palette::RED };
+                let formatted_target = if alert.source == "crypto" {
+                    poni_core::crypto::fmt_price(alert.target_price)
+                } else if alert.source == "forex" {
+                    poni_core::forex::fmt_idr(alert.target_price, alert.code.to_ascii_uppercase() == "EMAS")
+                } else {
+                    format!("Rp {}", alert.target_price.round() as i64)
+                };
+                let formatted_curr = if alert.source == "crypto" {
+                    poni_core::crypto::fmt_price(price)
+                } else if alert.source == "forex" {
+                    poni_core::forex::fmt_idr(price, alert.code.to_ascii_uppercase() == "EMAS")
+                } else {
+                    format!("Rp {}", price.round() as i64)
+                };
+                let title = format!("🔔 Target Tercapai: {}", alert.code);
+                let subtitle = format!("{} {} {} (Kini {})", alert.code, dir, formatted_target, formatted_curr);
+                notify_args = Some((col, title, subtitle));
+                break;
+            }
+        }
+
+        if let Some((col, title, subtitle)) = notify_args {
+            self.st.notify(Icon::Bell, col, title, subtitle, 8.0, None);
+            self.request_frame();
+        }
+        if save {
+            self.st.save();
         }
     }
 

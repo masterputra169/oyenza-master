@@ -566,8 +566,38 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.save();
     }
 
+    // Bell / Alert target button
+    let has_alert = st.store.alerts.iter().any(|a| a.source == "crypto" && a.code.eq_ignore_ascii_case(&pick) && !a.triggered);
+    let bell_r = Rect::new(title.x + cw + 30.0, title.y - 1.0, 22.0, 22.0);
+    let bell_resp = ui.button(wid("crypto.alert"), bell_r);
+    let bell_col = if has_alert { st.accent } else if bell_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if bell_resp.hovered {
+        ui.c.fill_circle(bell_r.center(), 10.0, Color::white(0.08));
+    }
+    ui.c.icon(Icon::Bell, Rect::from_center(bell_r.center(), 13.0, 13.0), bell_col);
+    if bell_resp.clicked {
+        if has_alert {
+            st.store.alerts.retain(|a| !(a.source == "crypto" && a.code.eq_ignore_ascii_case(&pick)));
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Notifikasi target {} dimatikan", pick), 3.0, None);
+        } else if let Some(ref cur_q) = q {
+            let target = if cur_q.price > 0.0 { (cur_q.price * 1.05 * 100.0).round() / 100.0 } else { 1.0 };
+            let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
+            st.store.alerts.push(poni_core::store::PriceAlert {
+                id: now_id,
+                source: "crypto".to_string(),
+                code: pick.clone(),
+                target_price: target,
+                above: true,
+                triggered: false,
+                enabled: true,
+            });
+            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus {}", pick, crypto::fmt_price(target)), 4.0, None);
+        }
+        st.save();
+    }
+
     let name = q.as_ref().map(|q| q.name.as_str()).unwrap_or_else(|| crypto::coin_name(&pick));
-    let name_x = title.x + cw + 32.0;
+    let name_x = title.x + cw + 56.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
 

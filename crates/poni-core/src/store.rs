@@ -54,6 +54,9 @@ pub struct Store {
     /// Ticker pinned to the idle notch / island (e.g. crypto coin or IDX stock).
     #[serde(default)]
     pub ticker: Option<TickerPin>,
+    /// Price alerts for crypto, stocks, or forex.
+    #[serde(default)]
+    pub alerts: Vec<PriceAlert>,
     /// Oyenza Studio Recorder has written to the island (`recorder::Message`)
     /// at least once, so it reads the Record page's links: Screen recorder
     /// shows from then on. 1.0.0 never writes, and its Record would do nothing.
@@ -74,9 +77,31 @@ impl Default for Store {
             stocks: crate::stocks::Watchlist::default(),
             crypto: crate::crypto::CryptoWatchlist::default(),
             ticker: None,
+            alerts: Vec::new(),
             recorder_island: false,
         }
     }
+}
+
+/// Price alert for target notifications in Dynamic Island / Notch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PriceAlert {
+    #[serde(default)]
+    pub id: u64,
+    /// "crypto", "stocks", "forex"
+    pub source: String,
+    /// e.g. "BTC", "BBCA", "USD/IDR", "EMAS"
+    pub code: String,
+    pub target_price: f64,
+    pub above: bool,
+    #[serde(default)]
+    pub triggered: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Pinned ticker on the idle island (crypto coin or IDX stock).

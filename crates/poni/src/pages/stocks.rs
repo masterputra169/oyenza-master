@@ -846,10 +846,40 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.save();
     }
 
+    // Bell / Alert target button
+    let has_alert = st.store.alerts.iter().any(|a| a.source == "stocks" && a.code.eq_ignore_ascii_case(&pick) && !a.triggered);
+    let bell_r = Rect::new(title.x + cw + 30.0, title.y - 1.0, 22.0, 22.0);
+    let bell_resp = ui.button(wid("stocks.alert"), bell_r);
+    let bell_col = if has_alert { st.accent } else if bell_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if bell_resp.hovered {
+        ui.c.fill_circle(bell_r.center(), 10.0, Color::white(0.08));
+    }
+    ui.c.icon(Icon::Bell, Rect::from_center(bell_r.center(), 13.0, 13.0), bell_col);
+    if bell_resp.clicked {
+        if has_alert {
+            st.store.alerts.retain(|a| !(a.source == "stocks" && a.code.eq_ignore_ascii_case(&pick)));
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Notifikasi target {} dimatikan", pick), 3.0, None);
+        } else if let Some(cur_q) = st.stocks.board.as_ref().and_then(|b| b.quote(&pick)) {
+            let target = if cur_q.price > 0.0 { (cur_q.price * 1.05).round() } else { 1.0 };
+            let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
+            st.store.alerts.push(poni_core::store::PriceAlert {
+                id: now_id,
+                source: "stocks".to_string(),
+                code: pick.clone(),
+                target_price: target,
+                above: true,
+                triggered: false,
+                enabled: true,
+            });
+            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus Rp {:.0}", pick, target), 4.0, None);
+        }
+        st.save();
+    }
+
     let name = st.stocks.board.as_ref().and_then(|b| b.quote(&pick)).map(|q| q.name.clone())
         .or_else(|| st.stocks.names.as_ref().and_then(|n| n.name(&pick).map(str::to_string)))
         .unwrap_or_else(|| if index { "IDX Composite".into() } else { String::new() });
-    let name_x = title.x + cw + 32.0;
+    let name_x = title.x + cw + 56.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(&name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
     if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
@@ -1263,6 +1293,31 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
                 source: "forex".into(),
                 code: pick.clone(),
             });
+        }
+        st.save();
+    }
+
+    let has_alert = st.store.alerts.iter().any(|a| a.source == "forex" && a.code.to_ascii_uppercase() == pick.to_ascii_uppercase() && !a.triggered);
+    let alert_w = if has_alert { 72.0 } else { 64.0 };
+    let alert_label = if has_alert { "Alert On" } else { "Alert" };
+    let alert_style = if has_alert { PillStyle::Primary(st.accent) } else { PillStyle::Utility };
+    if ui.pill(wid("forex.alert"), Rect::new(r.right() - pin_w - alert_w - 6.0, r.y, alert_w, 24.0), alert_label, Some(Icon::Bell), alert_style).clicked {
+        if has_alert {
+            st.store.alerts.retain(|a| !(a.source == "forex" && a.code.to_ascii_uppercase() == pick.to_ascii_uppercase()));
+            st.notify(Icon::Bell, palette::TEXT_DIM, "Alert Dihapus", &format!("Target {} dimatikan", pick), 3.0, None);
+        } else if let Some(q) = st.forex.board.as_ref().and_then(|b| b.quote(&pick)) {
+            let target = if q.rate > 0.0 { (q.rate * 1.02 * 100.0).round() / 100.0 } else { 1.0 };
+            let now_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs());
+            st.store.alerts.push(poni_core::store::PriceAlert {
+                id: now_id,
+                source: "forex".into(),
+                code: pick.clone(),
+                target_price: target,
+                above: true,
+                triggered: false,
+                enabled: true,
+            });
+            st.notify(Icon::Bell, st.accent, "Target Alert Diset!", &format!("{}: Notifikasi jika tembus {}", pick, q.formatted_rate()), 4.0, None);
         }
         st.save();
     }
