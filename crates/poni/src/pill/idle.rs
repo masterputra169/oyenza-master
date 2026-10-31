@@ -10,7 +10,7 @@ use crate::island::Geom;
 use crate::state::AppState;
 use crate::ui::Ui;
 use poni_core::datetime::fmt_clock;
-use poni_core::geom::{palette, Color, Rect};
+use poni_core::geom::{palette, Color, Point, Rect};
 use poni_core::settings::IdleStyle;
 use poni_core::svgpath::Seg;
 
@@ -91,12 +91,13 @@ fn battery_state(st: &AppState) -> Option<(u8, bool)> {
 }
 
 fn clock_width(st: &AppState) -> f32 {
+    let ticker_extra = if crate::activities::active_ticker_info(st).is_some() { 110.0 } else { 0.0 };
     let h24 = st.settings.use_24h;
     if battery_state(st).is_none() {
-        return if h24 { CLOCK_W } else { CLOCK_12H_W };
+        return (if h24 { CLOCK_W } else { CLOCK_12H_W }) + ticker_extra;
     }
     let time = if h24 { TIME_SLOT } else { TIME_12H_SLOT };
-    (SIDE + time + MID_GAP + PCT_SLOT + PCT_GAP + BATTERY_W + SIDE).round()
+    (SIDE + time + MID_GAP + PCT_SLOT + PCT_GAP + BATTERY_W + SIDE + ticker_extra).round()
 }
 
 /// "13:27" at the left end, "99%" and the battery at the right one (ref2).
@@ -104,6 +105,29 @@ fn clock_width(st: &AppState) -> f32 {
 fn draw_clock(ui: &mut Ui, st: &AppState, body: Rect) {
     let time = fmt_clock(&st.local, st.settings.use_24h);
     let ts = TextStyle::headline().tabular().color(Color::white(1.0));
+
+    if let Some((code, val_str, col)) = crate::activities::active_ticker_info(st) {
+        let (tw, _) = ui.c.measure(&time, &ts, 400.0);
+        let code_ts = TextStyle::body().weight(Weight::Bold).tabular();
+        let val_ts = TextStyle::body().weight(Weight::Semibold).tabular().color(col.unwrap_or(palette::TEXT));
+        let cw = ui.c.measure(&code, &code_ts, 100.0).0.ceil();
+        let vw = ui.c.measure(&val_str, &val_ts, 200.0).0.ceil();
+
+        let cy = body.center().y;
+        let gap = 8.0;
+        let dot_w = 4.0;
+        let total_w = tw + gap + dot_w + gap + cw + 4.0 + vw;
+        let x0 = (body.center().x - total_w / 2.0).round();
+
+        ui.c.text(&time, Rect::new(x0, body.y, tw + 2.0, body.h), &ts);
+        ui.c.fill_circle(Point::new(x0 + tw + gap + dot_w / 2.0, cy), 1.75, Color::white(0.40));
+
+        let tx = x0 + tw + gap + dot_w + gap;
+        ui.c.text(&code, Rect::new(tx, body.y, cw + 2.0, body.h), &code_ts);
+        ui.c.text(&val_str, Rect::new(tx + cw + 4.0, body.y, vw + 2.0, body.h), &val_ts);
+        return;
+    }
+
     let Some((percent, charging)) = battery_state(st) else {
         ui.c.text(&time, body, &ts.center());
         return;

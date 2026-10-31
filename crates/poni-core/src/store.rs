@@ -51,6 +51,9 @@ pub struct Store {
     pub stocks: crate::stocks::Watchlist,
     /// The Crypto add-on's list: coins, selected coin, show mode and chart range.
     pub crypto: crate::crypto::CryptoWatchlist,
+    /// Ticker pinned to the idle notch / island (e.g. crypto coin or IDX stock).
+    #[serde(default)]
+    pub ticker: Option<TickerPin>,
     /// Oyenza Studio Recorder has written to the island (`recorder::Message`)
     /// at least once, so it reads the Record page's links: Screen recorder
     /// shows from then on. 1.0.0 never writes, and its Record would do nothing.
@@ -70,9 +73,21 @@ impl Default for Store {
             script: crate::script::Script::default(),
             stocks: crate::stocks::Watchlist::default(),
             crypto: crate::crypto::CryptoWatchlist::default(),
+            ticker: None,
             recorder_island: false,
         }
     }
+}
+
+/// Pinned ticker on the idle island (crypto coin or IDX stock).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TickerPin {
+    #[serde(default)]
+    pub enabled: bool,
+    /// "crypto" or "stocks"
+    pub source: String,
+    /// The code (e.g. "BTC", "HYPE", "BBCA")
+    pub code: String,
 }
 
 /// What [`load_json`] found on disk.

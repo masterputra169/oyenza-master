@@ -259,6 +259,48 @@ fn clock_badge(st: &AppState) -> Option<ClockBadge> {
     }
 }
 
+pub fn active_ticker_info(st: &AppState) -> Option<(String, String, Option<Color>)> {
+    let pin = st.store.ticker.as_ref().filter(|t| t.enabled)?;
+    if pin.source == "crypto" {
+        let q = st.crypto.board.as_ref().and_then(|b| b.quote(&pin.code));
+        let code = pin.code.to_ascii_uppercase();
+        if let Some(q) = q {
+            let p_str = poni_core::crypto::fmt_price(q.price);
+            let pct = q.change_pct();
+            let sign = if pct >= 0.0 { "+" } else { "" };
+            let val_str = format!("{p_str} {sign}{pct:.1}%");
+            let col = match q.trend() {
+                poni_core::crypto::Trend::Up => Some(palette::GREEN),
+                poni_core::crypto::Trend::Down => Some(palette::RED),
+                poni_core::crypto::Trend::Flat => Some(palette::TEXT_DIM),
+            };
+            Some((code, val_str, col))
+        } else {
+            Some((code, "\u{2014}".to_string(), Some(palette::TEXT_DIM)))
+        }
+    } else if pin.source == "stocks" {
+        let q = st.stocks.board.as_ref().and_then(|b| b.quote(&pin.code));
+        let code = pin.code.to_ascii_uppercase();
+        if let Some(q) = q {
+            let p_str = poni_core::stocks::fmt_price(q.price, q.is_index());
+            let val_str = q.change_pct().map_or_else(|| p_str.clone(), |pct| {
+                let sign = if pct >= 0.0 { "+" } else { "" };
+                format!("{p_str} {sign}{pct:.1}%")
+            });
+            let col = match q.trend() {
+                poni_core::stocks::Trend::Up => Some(palette::GREEN),
+                poni_core::stocks::Trend::Down => Some(palette::RED),
+                poni_core::stocks::Trend::Flat => Some(palette::TEXT_DIM),
+            };
+            Some((code, val_str, col))
+        } else {
+            Some((code, "\u{2014}".to_string(), Some(palette::TEXT_DIM)))
+        }
+    } else {
+        None
+    }
+}
+
 pub fn geom(m: &Mode, st: &AppState) -> Geom {
     if let Some(g) = crate::pill::geom(m, st) {
         return g;
@@ -274,7 +316,8 @@ pub fn geom(m: &Mode, st: &AppState) -> Geom {
                     None => 0.0,
                 };
                 let lead = if oyen::on(st.settings.theme) { OYEN_CLOCK_LEAD } else { 0.0 };
-                Geom::new(base + badge + lead, 30.0, 14.0)
+                let ticker_extra = if active_ticker_info(st).is_some() { 110.0 } else { 0.0 };
+                Geom::new(base + badge + lead + ticker_extra, 30.0, 14.0)
             }
             IdleStyle::Minimal => Geom::new(150.0, 26.0, 12.0),
             // A little taller than the eyes, so his ears clear the top edge.
@@ -438,6 +481,28 @@ fn draw_idle(ui: &mut Ui, st: &mut AppState, body: Rect) {
             };
             let time = fmt_clock(&st.local, st.settings.use_24h);
             let ts = TextStyle::body().weight(Weight::Semibold).tabular();
+
+            if let Some((code, val_str, col)) = active_ticker_info(st) {
+                let (tw, _) = ui.c.measure(&time, &ts, 400.0);
+                let code_ts = TextStyle::footnote().weight(Weight::Bold).tabular();
+                let val_ts = TextStyle::footnote().weight(Weight::Semibold).tabular().color(col.unwrap_or(palette::TEXT));
+                let cw = ui.c.measure(&code, &code_ts, 100.0).0.ceil();
+                let vw = ui.c.measure(&val_str, &val_ts, 200.0).0.ceil();
+
+                let gap = 8.0;
+                let dot_w = 4.0;
+                let total_w = tw + gap + dot_w + gap + cw + 4.0 + vw;
+                let x0 = (body.center().x - total_w / 2.0).round();
+
+                ui.c.text(&time, Rect::new(x0, body.y, tw + 2.0, body.h), &ts);
+                ui.c.fill_circle(Point::new(x0 + tw + gap + dot_w / 2.0, cy), 1.5, Color::white(0.35));
+
+                let tx = x0 + tw + gap + dot_w + gap;
+                ui.c.text(&code, Rect::new(tx, body.y, cw + 2.0, body.h), &code_ts);
+                ui.c.text(&val_str, Rect::new(tx + cw + 4.0, body.y, vw + 2.0, body.h), &val_ts);
+                return;
+            }
+
             let Some(badge) = clock_badge(st) else {
                 ui.c.text(&time, body, &ts.center());
                 return;

@@ -2909,7 +2909,8 @@ impl App {
     /// starts the first time it opens.
     fn set_stocks_watch(&mut self) {
         let away = self.away.0 || self.away.1;
-        let open = self.mode == Mode::Expanded(PageKind::Stocks) && !away;
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "stocks");
+        let open = (self.mode == Mode::Expanded(PageKind::Stocks) || ticker_active) && !away && !self.st.power.saver;
         // Closed, and the worker already told so: nothing to do, every frame.
         if !open && !self.stocks_open {
             return;
@@ -2929,7 +2930,8 @@ impl App {
 
     fn set_crypto_watch(&mut self) {
         let away = self.away.0 || self.away.1;
-        let open = self.mode == Mode::Expanded(PageKind::Crypto) && !away;
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "crypto");
+        let open = (self.mode == Mode::Expanded(PageKind::Crypto) || ticker_active) && !away && !self.st.power.saver;
         if !open && !self.crypto_open {
             return;
         }

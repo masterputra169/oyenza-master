@@ -70,13 +70,26 @@ pub fn height(_st: &AppState) -> f32 {
 /// stock's year while a longer range shows, and every name while the search
 /// is open, each until it has come.
 pub fn watch(st: &AppState, open: bool) -> Watch {
-    let open = open && st.stocks_on();
-    let w = &st.store.stocks;
+    let page_open = open && st.stocks_on();
+    let pinned_code = st.store.ticker.as_ref().filter(|t| t.enabled && t.source == "stocks").map(|t| t.code.clone());
+    let active = page_open || (open && pinned_code.is_some() && st.stocks_on());
+    let mut codes = if page_open {
+        st.store.stocks.codes.clone()
+    } else if let Some(ref c) = pinned_code {
+        vec![c.clone()]
+    } else {
+        Vec::new()
+    };
+    if let Some(ref c) = pinned_code {
+        if !codes.iter().any(|x| x.eq_ignore_ascii_case(c)) {
+            codes.push(c.clone());
+        }
+    }
     Watch {
-        open,
-        codes: w.codes.clone(),
-        chart: (open && w.range != Range::Day && !st.stocks.years.contains_key(&w.pick)).then(|| w.pick.clone()),
-        names: open && st.ui.stocks.adding && st.stocks.names.is_none(),
+        open: active,
+        codes,
+        chart: (page_open && st.store.stocks.range != Range::Day && !st.stocks.years.contains_key(&st.store.stocks.pick)).then(|| st.store.stocks.pick.clone()),
+        names: page_open && st.ui.stocks.adding && st.stocks.names.is_none(),
     }
 }
 
@@ -778,8 +791,6 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let pick = st.store.stocks.pick.clone();
     let range = st.store.stocks.range;
     let index = pick == INDEX;
-    let board = st.stocks.board.as_ref();
-    let q = board.and_then(|b| b.quote(&pick));
 
     // Title: the code and the name, the ranges on the right.
     let code_st = TextStyle::value().weight(Weight::Bold);
@@ -787,8 +798,34 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let title = Rect::new(r.x, r.y, r.w, 22.0);
     let seg_x = r.right() - SEG_W * Range::ALL.len() as f32;
     ui.c.text(&pick, Rect::new(title.x, title.y, cw + 2.0, title.h), &code_st);
-    let name = q.map(|q| q.name.clone()).or_else(|| st.stocks.names.as_ref().and_then(|n| n.name(&pick).map(str::to_string))).unwrap_or_else(|| if index { "IDX Composite".into() } else { String::new() });
-    let name_r = Rect::new(title.x + cw + 8.0, title.y + 1.0, (seg_x - title.x - cw - 18.0).max(0.0), title.h);
+
+    let is_pinned = st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "stocks" && t.code.eq_ignore_ascii_case(&pick));
+    let pin_r = Rect::new(title.x + cw + 6.0, title.y - 1.0, 22.0, 22.0);
+    let pin_resp = ui.button(wid("stocks.pin_notch"), pin_r);
+    let pin_icon = if is_pinned { Icon::PinFill } else { Icon::Pin };
+    let pin_col = if is_pinned { st.accent } else if pin_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if pin_resp.hovered {
+        ui.c.fill_circle(pin_r.center(), 10.0, Color::white(0.08));
+    }
+    ui.c.icon(pin_icon, Rect::from_center(pin_r.center(), 13.0, 13.0), pin_col);
+    if pin_resp.clicked {
+        if is_pinned {
+            st.store.ticker = None;
+        } else {
+            st.store.ticker = Some(poni_core::store::TickerPin {
+                enabled: true,
+                source: "stocks".to_string(),
+                code: pick.clone(),
+            });
+        }
+        st.save();
+    }
+
+    let name = st.stocks.board.as_ref().and_then(|b| b.quote(&pick)).map(|q| q.name.clone())
+        .or_else(|| st.stocks.names.as_ref().and_then(|n| n.name(&pick).map(str::to_string)))
+        .unwrap_or_else(|| if index { "IDX Composite".into() } else { String::new() });
+    let name_x = title.x + cw + 32.0;
+    let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(&name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
     if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
         st.store.stocks.range = pick_range;

@@ -1914,8 +1914,9 @@ impl App {
     /// screen and someone is at the PC (`pages::stocks::watch`); the worker
     /// starts the first time it opens.
     fn set_stocks_watch(&mut self) {
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "stocks");
         // The self-test's scenes show a made-up market: nothing is asked.
-        let open = self.mode == Mode::Expanded(PageKind::Stocks) && !self.locked && !self.display_off && self.selftest.is_none();
+        let open = (self.mode == Mode::Expanded(PageKind::Stocks) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none();
         // Closed, and the worker already told so: nothing to do, every frame.
         if !open && !self.stocks_open {
             return;
@@ -1927,7 +1928,8 @@ impl App {
     }
 
     fn set_crypto_watch(&mut self) {
-        let open = self.mode == Mode::Expanded(PageKind::Crypto) && !self.locked && !self.display_off && self.selftest.is_none();
+        let ticker_active = self.st.store.ticker.as_ref().is_some_and(|t| t.enabled && t.source == "crypto");
+        let open = (self.mode == Mode::Expanded(PageKind::Crypto) || ticker_active) && !self.locked && !self.display_off && !self.st.power.saver && self.selftest.is_none();
         if !open && !self.crypto_open {
             return;
         }
