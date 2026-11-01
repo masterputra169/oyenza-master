@@ -1,14 +1,9 @@
 /**
  * DollarKilat Market Data Aggregator & Edge Cache
  * Subdomain: api.dollarkilat.xyz
- * Platform: Cloudflare Pages / Cloudflare Worker (Advanced Mode)
+ * Platform: Cloudflare Worker / Cloudflare Pages
  *
- * Provides high-speed, cached market data endpoints for Oyenza Master:
- * - US Stocks (Quotes, Historical 1D/1M/6M/1Y, and Search over 8,000+ stocks)
- * - Forex & Commodities (Real-time rates, Gold/Silver/Oil spot, 1Y chart, and search)
- * - Crypto (Real-time Binance quotes, 24h stats, and search)
- *
- * Edge Cache protects against rate-limits and IP blocks while maintaining < 20ms response time.
+ * Standalone single-file script. No dependencies, pure standard Web APIs.
  */
 
 const CORS_HEADERS = {
@@ -18,11 +13,9 @@ const CORS_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
 };
 
-const USER_AGENT = "DollarKilat-Hub/1.0 (OyenzaMaster; Cloudflare Edge)";
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-// Comprehensive list of 160+ global fiat currencies & commodities for search
 const FOREX_CATALOG = [
-  // Currencies
   { code: "USD/IDR", name: "US Dollar / Indonesian Rupiah", unit: "per 1 USD" },
   { code: "EUR/IDR", name: "Euro / Indonesian Rupiah", unit: "per 1 EUR" },
   { code: "SGD/IDR", name: "Singapore Dollar / Rupiah", unit: "per 1 SGD" },
@@ -80,42 +73,36 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "");
+    const accept = request.headers.get("accept") || "";
 
     try {
-      // 1. Health check & Metadata
-      if (path === "" || path === "/health" || path === "/v1") {
-        return jsonResponse({
-          status: "ok",
-          service: "DollarKilat Market Hub",
-          domain: "api.dollarkilat.xyz",
-          time: new Date().toISOString(),
-          version: "1.0.0",
-          endpoints: [
-            "/v1/us-stocks/quotes?symbols=AAPL,NVDA,TSLA",
-            "/v1/us-stocks/search?q=apple",
-            "/v1/us-stocks/history?symbol=AAPL&range=1y",
-            "/v1/forex/board?symbols=USD/IDR,GOLD,OIL",
-            "/v1/forex/search?q=euro",
-            "/v1/forex/history?symbol=USDIDR=X&range=1y",
-            "/v1/crypto/board?symbols=BTC,ETH,SOL",
-            "/v1/crypto/search?q=btc",
-          ],
-        }, 10);
+      // 1. Root / Landing & Health
+      if (path === "") {
+        if (accept.includes("text/html")) {
+          return new Response(getLandingHtml(), {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        return jsonResponse(getMetadata(), 10);
       }
 
-      // 2. US Stocks Quotes (Yahoo Finance multi-quote)
+      if (path === "/health" || path === "/v1") {
+        return jsonResponse(getMetadata(), 10);
+      }
+
+      // 2. US Stocks Quotes (Yahoo Finance chart multi-fetch)
       if (path === "/v1/us-stocks/quotes") {
         const symbolsParam = url.searchParams.get("symbols") || "AAPL,NVDA,MSFT,AMZN,GOOGL,META,TSLA";
         const symbols = symbolsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
         const data = await handleUsStockQuotes(symbols);
-        return jsonResponse(data, 15); // Cache for 15s
+        return jsonResponse(data, 15);
       }
 
       // 3. US Stocks Search
       if (path === "/v1/us-stocks/search") {
         const query = url.searchParams.get("q") || "";
         const data = await handleUsStockSearch(query);
-        return jsonResponse(data, 3600); // Cache search for 1 hour
+        return jsonResponse(data, 3600);
       }
 
       // 4. US Stocks Historical Chart (1D, 1M, 6M, 1Y)
@@ -123,7 +110,7 @@ export default {
         const symbol = (url.searchParams.get("symbol") || "AAPL").trim().toUpperCase();
         const range = (url.searchParams.get("range") || "1y").toLowerCase();
         const data = await handleUsStockHistory(symbol, range);
-        return jsonResponse(data, 300); // Cache for 5 mins
+        return jsonResponse(data, 300);
       }
 
       // 5. Forex & Commodities Board
@@ -131,36 +118,36 @@ export default {
         const symbolsParam = url.searchParams.get("symbols") || "USD/IDR,EUR/IDR,SGD/IDR,JPY/IDR,GOLD,OIL";
         const symbols = symbolsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
         const data = await handleForexBoard(symbols);
-        return jsonResponse(data, 30); // Cache for 30s
+        return jsonResponse(data, 30);
       }
 
       // 6. Forex & Commodities Search
       if (path === "/v1/forex/search") {
         const query = url.searchParams.get("q") || "";
         const data = handleForexSearch(query);
-        return jsonResponse(data, 86400); // Cache for 24h
+        return jsonResponse(data, 86400);
       }
 
       // 7. Forex & Commodities 1Y Close History
       if (path === "/v1/forex/history") {
         const symbol = url.searchParams.get("symbol") || "USD/IDR";
         const data = await handleForexHistory(symbol);
-        return jsonResponse(data, 600); // Cache for 10 mins
+        return jsonResponse(data, 600);
       }
 
-      // 8. Crypto Board (Binance Ticker 24h)
+      // 8. Crypto Board (Binance Vision Ticker 24h)
       if (path === "/v1/crypto/board") {
         const symbolsParam = url.searchParams.get("symbols") || "BTC,ETH,SOL,BNB,XRP,DOGE,ADA";
         const symbols = symbolsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
         const data = await handleCryptoBoard(symbols);
-        return jsonResponse(data, 15); // Cache for 15s
+        return jsonResponse(data, 15);
       }
 
       // 9. Crypto Search
       if (path === "/v1/crypto/search") {
         const query = url.searchParams.get("q") || "";
         const data = await handleCryptoSearch(query);
-        return jsonResponse(data, 3600); // Cache for 1h
+        return jsonResponse(data, 3600);
       }
 
       if (env && env.ASSETS) {
@@ -180,9 +167,59 @@ export default {
   },
 };
 
-/* -------------------------------------------------------------
- * Helper Handlers
- * ----------------------------------------------------------- */
+function getMetadata() {
+  return {
+    status: "ok",
+    service: "DollarKilat Market Hub",
+    domain: "api.dollarkilat.xyz",
+    time: new Date().toISOString(),
+    version: "1.0.0",
+    endpoints: [
+      "/v1/us-stocks/quotes?symbols=AAPL,NVDA,TSLA",
+      "/v1/us-stocks/search?q=apple",
+      "/v1/us-stocks/history?symbol=AAPL&range=1y",
+      "/v1/forex/board?symbols=USD/IDR,GOLD,OIL",
+      "/v1/forex/search?q=euro",
+      "/v1/forex/history?symbol=USDIDR=X&range=1y",
+      "/v1/crypto/board?symbols=BTC,ETH,SOL",
+      "/v1/crypto/search?q=btc",
+    ],
+  };
+}
+
+function getLandingHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DollarKilat Edge Hub</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #151d2f; border-radius: 16px; padding: 36px; max-width: 520px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); border: 1px solid #1e293b; text-align: center; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 9999px; background: rgba(34, 197, 94, 0.15); color: #4ade80; font-size: 13px; font-weight: 600; margin-bottom: 20px; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px #22c55e; }
+    h1 { margin: 0 0 10px; font-size: 26px; color: #fff; font-weight: 700; letter-spacing: -0.5px; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
+    .links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
+    .link-item { background: #0d1322; padding: 12px 14px; border-radius: 8px; border: 1px solid #1e293b; text-decoration: none; color: #38bdf8; font-size: 13px; font-family: monospace; display: block; transition: all 0.2s; }
+    .link-item:hover { border-color: #38bdf8; background: #131c31; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge"><div class="dot"></div> DollarKilat Hub Active</div>
+    <h1>DollarKilat Edge API</h1>
+    <p>Centralized market data edge cache for <b>Oyenza Master</b> (US Stocks, Forex & Commodities, Crypto).</p>
+    <div class="links">
+      <a class="link-item" href="/health" target="_blank">GET /health</a>
+      <a class="link-item" href="/v1/us-stocks/quotes?symbols=AAPL,NVDA" target="_blank">GET /v1/us-stocks</a>
+      <a class="link-item" href="/v1/forex/board?symbols=USD/IDR,GOLD" target="_blank">GET /v1/forex</a>
+      <a class="link-item" href="/v1/crypto/board?symbols=BTC,ETH" target="_blank">GET /v1/crypto</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
 
 function jsonResponse(data, maxAgeSeconds = 0) {
   const headers = { ...CORS_HEADERS };
@@ -194,50 +231,50 @@ function jsonResponse(data, maxAgeSeconds = 0) {
   return new Response(JSON.stringify(data), { headers });
 }
 
-// 2. US Stock Quotes via Yahoo Finance API
+// 2. US Stock Quotes via Yahoo Finance /v8/finance/chart (Robust, crumb-free)
 async function handleUsStockQuotes(symbols) {
   if (symbols.length === 0) return { quotes: [] };
-  const query = encodeURIComponent(symbols.join(","));
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${query}`;
 
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-  if (!res.ok) {
-    throw new Error(`Yahoo Finance returned HTTP ${res.status}`);
-  }
+  const results = await Promise.all(
+    symbols.map(async (sym) => {
+      try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+        const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+        if (!res.ok) return null;
+        const json = await res.json();
+        const meta = json?.chart?.result?.[0]?.meta;
+        if (!meta) return null;
 
-  const json = await res.json();
-  const rawList = json?.quoteResponse?.result || [];
-  const quotes = rawList.map((q) => {
-    const symbol = q.symbol || "";
-    const name = q.shortName || q.longName || symbol;
-    const price = q.regularMarketPrice ?? 0;
-    const prevClose = q.regularMarketPreviousClose ?? price;
-    const open = q.regularMarketOpen ?? price;
-    const high = q.regularMarketDayHigh ?? price;
-    const low = q.regularMarketDayLow ?? price;
-    const volume = q.regularMarketVolume ?? 0;
-    const marketCap = q.marketCap ?? 0;
-    const peRatio = q.trailingPE ?? null;
-    const change = price - prevClose;
-    const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+        const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+        const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+        const high = meta.regularMarketDayHigh ?? price;
+        const low = meta.regularMarketDayLow ?? price;
+        const volume = meta.regularMarketVolume ?? 0;
+        const change = price - prevClose;
+        const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
 
-    return {
-      symbol,
-      name,
-      price,
-      prev_close: prevClose,
-      open,
-      high,
-      low,
-      volume,
-      market_cap: marketCap,
-      pe_ratio: peRatio,
-      change,
-      change_pct: changePct,
-      currency: q.currency || "USD",
-    };
-  });
+        return {
+          symbol: meta.symbol || sym,
+          name: meta.shortName || meta.longName || sym,
+          price,
+          prev_close: prevClose,
+          open: prevClose,
+          high,
+          low,
+          volume,
+          market_cap: 0,
+          pe_ratio: null,
+          change,
+          change_pct: changePct,
+          currency: meta.currency || "USD",
+        };
+      } catch (_) {
+        return null;
+      }
+    })
+  );
 
+  const quotes = results.filter(Boolean);
   return { quotes, updated_at: Math.floor(Date.now() / 1000) };
 }
 
@@ -331,7 +368,6 @@ async function handleUsStockHistory(symbol, range) {
 
 // 5. Forex & Commodities Board
 async function handleForexBoard(symbols) {
-  // Fetch USD/IDR and base rates from Open Exchange Rates / ExchangeRate-API
   let usdIdr = 16250.0;
   let rates = {};
 
@@ -346,10 +382,9 @@ async function handleForexBoard(symbols) {
     }
   } catch (_) {}
 
-  // Fetch Gold & Silver spot prices from Binance PAXG / commodities feed
   let goldUsdPerOunce = 2750.0;
   try {
-    const paxgRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT");
+    const paxgRes = await fetch("https://data-api.binance.vision/api/v3/ticker/price?symbol=PAXGUSDT");
     if (paxgRes.ok) {
       const p = await paxgRes.json();
       if (p.price) goldUsdPerOunce = parseFloat(p.price);
@@ -363,7 +398,7 @@ async function handleForexBoard(symbols) {
     let name = code;
     let rate = 0;
     let unit = "";
-    let changePct = 0.15; // default subtle change
+    let changePct = 0.15;
 
     if (code === "USD/IDR") {
       name = "US Dollar / Rupiah";
@@ -465,15 +500,23 @@ async function handleForexHistory(symbol) {
   return { symbol, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// 8. Crypto Board via Binance API
+// 8. Crypto Board via Binance Vision API (No datacenter/geo block)
 async function handleCryptoBoard(symbols) {
   if (symbols.length === 0) return { quotes: [] };
   const pairMap = {};
+  const formattedPairs = [];
   symbols.forEach((s) => {
-    pairMap[`${s}USDT`] = s;
+    const pair = `${s}USDT`;
+    pairMap[pair] = s;
+    formattedPairs.push(`"${pair}"`);
   });
 
-  const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+  const queryUrl = `https://data-api.binance.vision/api/v3/ticker/24hr?symbols=[${encodeURIComponent(formattedPairs.join(","))}]`;
+  let res = await fetch(queryUrl, { headers: { "User-Agent": USER_AGENT } });
+
+  if (!res.ok) {
+    res = await fetch("https://data-api.binance.vision/api/v3/ticker/24hr", { headers: { "User-Agent": USER_AGENT } });
+  }
   if (!res.ok) throw new Error(`Binance API returned HTTP ${res.status}`);
 
   const allTickers = await res.json();
@@ -506,7 +549,7 @@ async function handleCryptoBoard(symbols) {
 // 9. Crypto Search
 async function handleCryptoSearch(query) {
   const q = (query || "").trim().toUpperCase();
-  const res = await fetch("https://api.binance.com/api/v3/ticker/price");
+  const res = await fetch("https://data-api.binance.vision/api/v3/ticker/price", { headers: { "User-Agent": USER_AGENT } });
   if (!res.ok) return { results: [] };
   const all = await res.json();
   const usdtPairs = all
