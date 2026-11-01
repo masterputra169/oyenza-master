@@ -100,17 +100,22 @@ const
 procedure StopPoni();
 var
   I, ResultCode: Integer;
+  Wnd: HWND;
 begin
-  if FindWindowByClassName('{#IslandClass}') = 0 then
-    Exit;
-  PostMessage(FindWindowByClassName('{#IslandClass}'), WM_CLOSE, 0, 0);
-  for I := 1 to 30 do
+  Wnd := FindWindowByClassName('{#IslandClass}');
+  if Wnd <> 0 then
   begin
-    if FindWindowByClassName('{#IslandClass}') = 0 then
-      Exit;
-    Sleep(100);
+    PostMessage(Wnd, WM_CLOSE, 0, 0);
+    for I := 1 to 15 do
+    begin
+      Sleep(100);
+      if FindWindowByClassName('{#IslandClass}') = 0 then
+        Break;
+    end;
   end;
+  { Always ensure any existing or background copy of poni.exe is completely stopped }
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(300);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -120,10 +125,23 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
-  { Unticking "Start with Windows" on a reinstall turns it off, even if the app's menu turned it on. }
-  if (CurStep = ssPostInstall) and not WizardIsTaskSelected('autostart') then
-    RegDeleteValue(HKEY_CURRENT_USER, RunKey, '{#AppDir}');
+  if CurStep = ssInstall then
+  begin
+    { Ensure the binary is completely unlocked right before copying files }
+    StopPoni();
+  end;
+  if CurStep = ssPostInstall then
+  begin
+    { Ensure no stale background instance holds the mutex before [Run] launches the app }
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(250);
+    { Unticking "Start with Windows" on a reinstall turns it off, even if the app's menu turned it on. }
+    if not WizardIsTaskSelected('autostart') then
+      RegDeleteValue(HKEY_CURRENT_USER, RunKey, '{#AppDir}');
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

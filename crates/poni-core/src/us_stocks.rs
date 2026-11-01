@@ -57,9 +57,34 @@ pub struct UsStockQuote {
     pub high: Option<f64>,
     pub low: Option<f64>,
     pub volume: Option<f64>,
+    /// The 52-week (low, high) as Yahoo reports it; None when it doesn't.
     pub w52: Option<(f64, f64)>,
-    /// Day sparkline points: (relative minute, price)
+    /// Day sparkline points: (minute since the 9:30 ET opening bell, price).
     pub spark: Vec<(u16, f32)>,
+    /// The session's first traded price.
+    #[serde(default)]
+    pub open: Option<f64>,
+}
+
+/// Minutes in a regular NYSE/NASDAQ session (9:30 to 16:00 ET).
+pub const SESSION_MIN: u16 = 390;
+
+/// Where minute `m` of the session sits across a day chart, 0..1.
+pub fn day_x(m: u16) -> f32 {
+    f32::from(m.min(SESSION_MIN)) / f32::from(SESSION_MIN)
+}
+
+/// Minute `m` of the session as a New York clock time, like "10:35 AM".
+pub fn session_label(m: u16) -> String {
+    let t = 9 * 60 + 30 + u32::from(m.min(SESSION_MIN));
+    let (h, mm) = (t / 60, t % 60);
+    let (h12, ap) = match h {
+        0 => (12, "AM"),
+        1..=11 => (h, "AM"),
+        12 => (12, "PM"),
+        _ => (h - 12, "PM"),
+    };
+    format!("{h12}:{mm:02} {ap}")
 }
 
 impl UsStockQuote {
@@ -72,8 +97,9 @@ impl UsStockQuote {
             high: Some(high),
             low: Some(low),
             volume: Some(vol),
-            w52: Some((low * 0.85, high * 1.15)),
+            w52: None,
             spark,
+            open: None,
         }
     }
 
@@ -163,34 +189,67 @@ impl UsStockBoard {
     }
 }
 
-/// Parses Yahoo Finance `/v8/finance/chart/{ticker}` JSON into (price, prev_close, high, low, volume, sparkline).
-pub fn parse_yahoo_chart_json(json_str: &str) -> Result<(f64, f64, Option<f64>, Option<f64>, Option<f64>, Vec<(u16, f32)>), String> {
+/// One answer of Yahoo Finance's `/v8/finance/chart/{ticker}?range=1d`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct YahooChart {
+    pub price: f64,
+    pub prev: f64,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub volume: Option<f64>,
+    pub w52: Option<(f64, f64)>,
+    /// (minute since the opening bell, close), in time order.
+    pub spark: Vec<(u16, f32)>,
+}
+
+fn pos(v: Option<&serde_json::Value>) -> Option<f64> {
+    v.and_then(serde_json::Value::as_f64).filter(|x| x.is_finite() && *x > 0.0)
+}
+
+/// Reads a day chart. Each point sits at its real time in the session
+/// (from its timestamp and the session's start), so a chart drawn before
+/// the close stops where trading has got to, as the IDX page's does.
+pub fn parse_yahoo_chart_json(json_str: &str) -> Result<YahooChart, String> {
     let v: serde_json::Value = serde_json::from_str(json_str).map_err(|e| format!("parse error: {e}"))?;
     let res = v.get("chart").and_then(|c| c.get("result")).and_then(|r| r.as_array()).and_then(|a| a.first()).ok_or("no chart.result[0]")?;
     let meta = res.get("meta").ok_or("no meta")?;
 
-    let price = meta.get("regularMarketPrice").and_then(|p| p.as_f64()).unwrap_or(0.0);
-    let prev = meta.get("chartPreviousClose").or_else(|| meta.get("previousClose")).and_then(|p| p.as_f64()).unwrap_or(price);
-    let high = meta.get("regularMarketDayHigh").and_then(|p| p.as_f64());
-    let low = meta.get("regularMarketDayLow").and_then(|p| p.as_f64());
-    let volume = meta.get("regularMarketVolume").and_then(|p| p.as_f64());
+    let price = pos(meta.get("regularMarketPrice")).ok_or("no price")?;
+    let prev = pos(meta.get("chartPreviousClose")).or_else(|| pos(meta.get("previousClose"))).unwrap_or(price);
+    let high = pos(meta.get("regularMarketDayHigh"));
+    let low = pos(meta.get("regularMarketDayLow"));
+    let volume = pos(meta.get("regularMarketVolume"));
+    let w52 = pos(meta.get("fiftyTwoWeekLow")).zip(pos(meta.get("fiftyTwoWeekHigh")));
+    let start = meta.get("currentTradingPeriod").and_then(|p| p.get("regular")).and_then(|r| r.get("start")).and_then(serde_json::Value::as_i64);
 
     let mut spark = Vec::new();
-    if let Some(indicators) = res.get("indicators") {
-        if let Some(quote_arr) = indicators.get("quote").and_then(|q| q.as_array()).and_then(|a| a.first()) {
-            if let Some(closes) = quote_arr.get("close").and_then(|c| c.as_array()) {
-                let count = closes.len();
-                for (i, val) in closes.iter().enumerate() {
-                    if let Some(c) = val.as_f64().filter(|c| *c > 0.0) {
-                        let min = if count > 0 { ((i as f32 / count as f32) * 390.0) as u16 } else { 0 };
-                        spark.push((min, c as f32));
+    let mut open = None;
+    let ts = res.get("timestamp").and_then(|t| t.as_array());
+    let quote = res.get("indicators").and_then(|i| i.get("quote")).and_then(|q| q.as_array()).and_then(|a| a.first());
+    if let (Some(ts), Some(quote)) = (ts, quote) {
+        open = quote.get("open").and_then(|o| o.as_array()).and_then(|o| o.iter().find_map(|x| pos(Some(x))));
+        let start = start.or_else(|| ts.first().and_then(serde_json::Value::as_i64)).unwrap_or(0);
+        if let Some(closes) = quote.get("close").and_then(|c| c.as_array()) {
+            for (t, c) in ts.iter().zip(closes) {
+                if let (Some(t), Some(c)) = (t.as_i64(), pos(Some(c))) {
+                    if t < start {
+                        continue;
                     }
+                    let m = ((t - start) / 60).clamp(0, i64::from(SESSION_MIN)) as u16;
+                    spark.push((m, c as f32));
                 }
             }
         }
     }
+    spark.sort_by_key(|p| p.0);
+    spark.dedup_by_key(|p| p.0);
+    // The line ends on the price shown above it.
+    if let Some(last) = spark.last_mut() {
+        last.1 = price as f32;
+    }
 
-    Ok((price, prev, high, low, volume, spark))
+    Ok(YahooChart { price, prev, open, high, low, volume, w52, spark })
 }
 
 /// Parses Yahoo Finance daily historical closes from `/v8/finance/chart/{ticker}?interval=1d&range=1y`.
@@ -220,4 +279,34 @@ pub fn parse_yahoo_history_json(json_str: &str) -> Result<Vec<(i32, f64)>, Strin
     }
 
     Ok(points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_day_chart_sits_each_point_at_its_time_in_the_session() {
+        // Session opens at 1_700_000_000; points at the open, +5 min and +60 min.
+        let json = r#"{"chart":{"result":[{"meta":{"regularMarketPrice":101.5,"chartPreviousClose":100.0,
+            "regularMarketDayHigh":102.0,"regularMarketDayLow":99.5,"regularMarketVolume":1000,
+            "fiftyTwoWeekLow":80.0,"fiftyTwoWeekHigh":120.0,
+            "currentTradingPeriod":{"regular":{"start":1700000000,"end":1700023400}}},
+            "timestamp":[1700000000,1700000300,1700003600],
+            "indicators":{"quote":[{"open":[null,100.2,100.9],"close":[100.1,null,101.0]}]}}]}}"#;
+        let c = parse_yahoo_chart_json(json).unwrap();
+        assert_eq!(c.prev, 100.0);
+        assert_eq!(c.open, Some(100.2));
+        assert_eq!(c.w52, Some((80.0, 120.0)));
+        // The null close is skipped; the last point ends on the price.
+        assert_eq!(c.spark, vec![(0, 100.1), (60, 101.5)]);
+    }
+
+    #[test]
+    fn session_minutes_read_as_new_york_clock_times() {
+        assert_eq!(session_label(0), "9:30 AM");
+        assert_eq!(session_label(150), "12:00 PM");
+        assert_eq!(session_label(SESSION_MIN), "4:00 PM");
+        assert_eq!(day_x(195), 0.5);
+    }
 }

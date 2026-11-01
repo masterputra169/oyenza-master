@@ -104,24 +104,25 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             let mut quotes = Vec::new();
 
             for &(sym, name) in &KNOWN_US_STOCKS {
-                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=30m&range=1d");
+                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=5m&range=1d");
                 if let Ok(resp) = client.get(&url, TIMEOUT) {
                     if resp.status == 200 {
-                        if let Ok((price, prev, high, low, volume, spark)) = us_stocks::parse_yahoo_chart_json(&resp.body) {
-                                if price > 0.0 {
-                                    quotes.push(UsStockQuote {
-                                        symbol: sym.to_string(),
-                                        name: name.to_string(),
-                                        price,
-                                        prev,
-                                        high,
-                                        low,
-                                        volume,
-                                        w52: high.zip(low).map(|(h, l)| (l * 0.85, h * 1.15)),
-                                        spark,
-                                    });
-                                }
+                        if let Ok(chart) = us_stocks::parse_yahoo_chart_json(&resp.body) {
+                            if chart.price > 0.0 {
+                                quotes.push(UsStockQuote {
+                                    symbol: sym.to_string(),
+                                    name: name.to_string(),
+                                    price: chart.price,
+                                    prev: chart.prev,
+                                    high: chart.high,
+                                    low: chart.low,
+                                    volume: chart.volume,
+                                    w52: chart.w52,
+                                    spark: chart.spark,
+                                    open: chart.open,
+                                });
                             }
+                        }
                     }
                 }
             }

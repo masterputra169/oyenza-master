@@ -130,6 +130,7 @@ pub struct StocksUi {
     /// When the page last drew (mono seconds): the glides' step.
     drawn: f64,
     chart: Morph,
+    us_chart: Morph,
     /// Still pictures (the self-test, the Mac renders): every glide and
     /// morph is at its end.
     still: bool,
@@ -143,6 +144,7 @@ impl StocksUi {
         self.drawn = now;
         self.swap_k = 1.0;
         self.edit_k = if self.editing { 1.0 } else { 0.0 };
+        self.us_chart = Morph::default();
     }
 }
 
@@ -1124,6 +1126,9 @@ struct Line {
     /// Day lines: the minute of each point; longer ranges: its day.
     minutes: Vec<u16>,
     days: Vec<i64>,
+    labels: Vec<String>,
+    left_end: Option<String>,
+    right_end: Option<String>,
     /// The previous close's height, dotted across (1D only).
     base: Option<f32>,
     color: Color,
@@ -1133,6 +1138,9 @@ struct Line {
 impl Line {
     /// The scrubbed point's time ("10:35") or date ("24 Oct 2026").
     fn label(&self, i: usize) -> String {
+        if let Some(lbl) = self.labels.get(i) {
+            return lbl.clone();
+        }
         match (self.minutes.get(i), self.days.get(i)) {
             (Some(m), _) => stocks::minute_label(*m),
             (_, Some(d)) => stocks::date_label(*d),
@@ -1142,6 +1150,9 @@ impl Line {
 
     /// The axis's two ends.
     fn ends(&self) -> (String, String) {
+        if let (Some(a), Some(b)) = (&self.left_end, &self.right_end) {
+            return (a.clone(), b.clone());
+        }
         match (self.days.first(), self.days.last()) {
             (Some(a), Some(b)) => (stocks::date_label(*a), stocks::date_label(*b)),
             _ => (stocks::minute_label(self.span.0), stocks::minute_label(self.span.1)),
@@ -1151,7 +1162,7 @@ impl Line {
 
 fn chart_line(st: &AppState, q: &Quote, span: (u16, u16), range: Range) -> Line {
     let tag = st.stocks.board.as_ref().map_or("", |b| b.tag.as_str());
-    let mut line = Line { key: String::new(), pts: Vec::new(), values: Vec::new(), minutes: Vec::new(), days: Vec::new(), base: None, color: trend_color(q.trend()), span };
+    let mut line = Line { key: String::new(), pts: Vec::new(), values: Vec::new(), minutes: Vec::new(), days: Vec::new(), labels: Vec::new(), left_end: None, right_end: None, base: None, color: trend_color(q.trend()), span };
     match range {
         Range::Day => {
             line.key = format!("{}/1d/{tag}", q.code);
@@ -1421,6 +1432,91 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
     }
 }
 
+fn us_chart_line(st: &AppState, q: &poni_core::us_stocks::UsStockQuote, range: Range) -> Line {
+    let mut line = Line {
+        key: String::new(),
+        pts: Vec::new(),
+        values: Vec::new(),
+        minutes: Vec::new(),
+        days: Vec::new(),
+        labels: Vec::new(),
+        left_end: None,
+        right_end: None,
+        base: None,
+        color: match q.trend() {
+            poni_core::stocks::Trend::Up => palette::GREEN,
+            poni_core::stocks::Trend::Down => palette::RED,
+            poni_core::stocks::Trend::Flat => Color::white(0.36),
+        },
+        span: (0, poni_core::us_stocks::SESSION_MIN),
+    };
+    match range {
+        Range::Day => {
+            line.left_end = Some("9:30 AM".to_string());
+            line.right_end = Some("4:00 PM".to_string());
+            let last_s = q.spark.last().map_or(0, |p| p.1.to_bits());
+            line.key = format!("{}/1d/{last_s}/{}", q.symbol, q.spark.len());
+            line.values = q.spark.iter().map(|p| f64::from(p.1)).collect();
+            line.minutes = q.spark.iter().map(|p| p.0).collect();
+            line.labels = q.spark.iter().map(|p| poni_core::us_stocks::session_label(p.0)).collect();
+            if let Some((lo, hi)) = stocks::bounds(line.values.iter().copied(), Some(q.prev)) {
+                let y = |v: f64| ((v - lo) / (hi - lo)) as f32;
+                line.pts = q.spark.iter().map(|p| (poni_core::us_stocks::day_x(p.0), y(f64::from(p.1)))).collect();
+                line.base = Some(y(q.prev));
+            }
+        }
+        _ => {
+            line.left_end = match range {
+                Range::Month => Some("1 Mo Ago".to_string()),
+                Range::HalfYear => Some("6 Mo Ago".to_string()),
+                Range::Year => Some("1 Yr Ago".to_string()),
+                _ => None,
+            };
+            line.right_end = Some("Today".to_string());
+            let hist = st.us_stocks.years.get(&q.symbol);
+            let count = match range {
+                Range::Month => 22,
+                Range::HalfYear => 130,
+                Range::Year => 260,
+                _ => 22,
+            };
+            let raw_pts: Vec<(i32, f64)> = if let Some(h) = hist {
+                let start = h.len().saturating_sub(count);
+                h[start..].to_vec()
+            } else {
+                Vec::new()
+            };
+            line.key = format!("{}/{}/{}/{}", q.symbol, range.label(), raw_pts.len(), q.price.to_bits());
+            if !raw_pts.is_empty() {
+                line.days = raw_pts.iter().map(|(d, _)| i64::from(*d)).collect();
+                line.values = raw_pts.iter().map(|(_, p)| *p).collect();
+                line.labels = raw_pts.iter().enumerate().map(|(i, _)| format!("{}d ago", raw_pts.len().saturating_sub(1 + i))).collect();
+                if let Some(last) = line.values.last_mut() {
+                    *last = q.price;
+                }
+                let vals = &line.values;
+                if let (Some((lo, hi)), Some(&first), Some(&last)) = (stocks::bounds(vals.iter().copied(), None), vals.first(), vals.last()) {
+                    let n = (vals.len().saturating_sub(1)).max(1) as f32;
+                    line.pts = vals.iter().enumerate().map(|(i, &c)| (i as f32 / n, ((c - lo) / (hi - lo)) as f32)).collect();
+                    line.color = match stocks::trend_of(last, first) {
+                        poni_core::stocks::Trend::Up => palette::GREEN,
+                        poni_core::stocks::Trend::Down => palette::RED,
+                        poni_core::stocks::Trend::Flat => Color::white(0.36),
+                    };
+                }
+            } else if !q.spark.is_empty() {
+                line.values = q.spark.iter().map(|p| f64::from(p.1)).collect();
+                line.labels = q.spark.iter().map(|p| poni_core::us_stocks::session_label(p.0)).collect();
+                if let Some((lo, hi)) = stocks::bounds(line.values.iter().copied(), Some(q.prev)) {
+                    let y = |v: f64| ((v - lo) / (hi - lo)) as f32;
+                    line.pts = q.spark.iter().map(|p| (poni_core::us_stocks::day_x(p.0), y(f64::from(p.1)))).collect();
+                    line.base = Some(y(q.prev));
+                }
+            }
+        }
+    }
+    line
+}
 fn us_stocks_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let pick = st.us_stocks.pick.clone();
     let range = st.us_stocks.range;
@@ -1499,111 +1595,91 @@ fn us_stocks_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.save();
     }
 
-    // 2. Chart points preparation
-    let chart_r = Rect::new(r.x, r.y + CHART_Y, r.w, CHART_H);
-    let hist_data = st.us_stocks.years.get(&q.symbol);
-    let mut pts_data: Vec<f64> = Vec::new();
-    if range == Range::Day || hist_data.is_none() {
-        pts_data = q.spark.iter().map(|p| f64::from(p.1)).collect();
-    } else if let Some(h) = hist_data {
-        let count = match range {
-            Range::Month => 22,
-            Range::HalfYear => 130,
-            Range::Year => 260,
-            _ => 22,
+    // 2. Chart rendering with morphing & smooth curves
+    let chart = Rect::new(r.x, r.y + CHART_Y, r.w, CHART_H);
+    let line = us_chart_line(st, &q, range);
+    let now = ui.now;
+    let still = st.ui.stocks.still;
+    let m = &mut st.ui.stocks.us_chart;
+    let target: Vec<(f32, f32)> = stocks::resample(&line.pts, SAMPLES);
+    if line.key != m.key {
+        let (from, base_from, color_from) = if still {
+            (target.clone(), line.base, Some(line.color))
+        } else if m.to.is_empty() {
+            let flat = line.base.unwrap_or_else(|| target.first().map_or(0.5, |p| p.1));
+            (target.iter().map(|p| (p.0, flat)).collect(), line.base, Some(line.color))
+        } else {
+            let e = morph_k(m.t0, now);
+            (lerp_pts(&m.from, &m.to, e), lerp_base(m.base_from, m.base_to, e), Some(lerp_color(m.color_from, m.color_to, e)))
         };
-        let start = h.len().saturating_sub(count);
-        pts_data = h[start..].iter().map(|p| p.1).collect();
+        *m = Morph { key: line.key.clone(), from, to: target.clone(), base_from, base_to: line.base, color_from, color_to: Some(line.color), t0: now };
     }
-    if pts_data.is_empty() {
-        pts_data = q.spark.iter().map(|p| f64::from(p.1)).collect();
+    let e = morph_k(m.t0, now);
+    if e < 1.0 {
+        ui.request_anim();
+    }
+    let shown = lerp_pts(&m.from, &m.to, e);
+    let color = lerp_color(m.color_from, m.color_to, e);
+    let base = lerp_base(m.base_from, m.base_to, e);
+    let to_px = |p: (f32, f32)| (chart.x + p.0 * chart.w, chart.bottom() - p.1 * chart.h);
+    if let Some(b) = base {
+        dotted(ui, chart.x, chart.right(), (chart.bottom() - b * chart.h).round() + 0.5, Color::white(0.30));
+    }
+    let px: Vec<(f32, f32)> = shown.iter().map(|p| to_px(*p)).collect();
+    if line.pts.len() >= 2 {
+        draw_line(ui, &px, color, chart.y, chart.bottom() + 6.0, 2.0, Some(0.34));
+    } else {
+        let msg = "No chart points available.";
+        ui.c.text(msg, chart, &TextStyle::footnote().color(palette::TEXT_FAINT).center());
     }
 
     // 3. Scrubbing detection
-    let scrub = ui.input.mouse.filter(|p| chart_r.inset(-4.0, -6.0).contains(*p) && pts_data.len() >= 2).map(|p| {
-        let x = ((p.x - chart_r.x) / chart_r.w).clamp(0.0, 1.0);
-        let n_pts = (pts_data.len() - 1) as f32;
-        (x * n_pts).round().clamp(0.0, n_pts) as usize
+    let scrub = ui.input.mouse.filter(|p| chart.inset(-4.0, -6.0).contains(*p) && line.pts.len() >= 2).map(|p| {
+        let x = ((p.x - chart.x) / chart.w).clamp(0.0, 1.0);
+        let i = line.pts.iter().enumerate().min_by(|a, b| (a.1 .0 - x).abs().total_cmp(&(b.1 .0 - x).abs())).map_or(0, |(i, _)| i);
+        i
     });
+    if let Some(i) = scrub.filter(|_| e >= 1.0) {
+        let (sx, sy) = to_px(line.pts[i]);
+        ui.c.line(Point::new(sx, chart.y - 2.0), Point::new(sx, chart.bottom()), Color::white(0.32), 1.0);
+        ui.c.fill_circle(Point::new(sx, sy), 5.0, palette::ISLAND);
+        ui.c.fill_circle(Point::new(sx, sy), 3.5, color);
+    }
 
-    let (disp_price, disp_diff, when_label) = match scrub {
-        Some(idx) if idx < pts_data.len() => {
-            let v = pts_data[idx];
-            let d = v - q.prev;
-            let label = match range {
-                Range::Day => format!("{:02}:{:02} EST", 9 + (idx * 30 + 30) / 60, (idx * 30 + 30) % 60),
-                Range::Month => format!("{}d ago", pts_data.len() - 1 - idx),
-                _ => format!("{}d ago", pts_data.len() - 1 - idx),
-            };
-            (v, d, Some(label))
-        }
-        _ => (q.price, q.diff(), None),
+    // 4. Price & Change subtitle line
+    let (value, when) = match scrub.filter(|_| e >= 1.0) {
+        Some(i) => (line.values[i], Some(line.label(i))),
+        None => (q.price, None),
     };
-
-    // 4. Price & Change subtitle line (exact same layout & typography as Stocks)
+    let from = if range == Range::Day { q.prev } else { line.values.first().copied().unwrap_or(q.prev) };
     let py = r.y + PRICE_Y;
-    let price_str = format!("${:.2}", disp_price);
+    let price_str = format!("${:.2}", value);
     let price_st = TextStyle::value().weight(Weight::Semibold).tabular();
     let pw = ui.c.measure(&price_str, &price_st, 200.0).0.ceil();
     ui.c.text(&price_str, Rect::new(r.x, py, pw + 2.0, 24.0), &price_st);
 
-    let sign = if disp_diff >= 0.0 { "+" } else { "" };
-    let pct = if q.prev > 0.0 { disp_diff / q.prev * 100.0 } else { 0.0 };
-    let chg_str = format!("{sign}${:.2} ({sign}{:.2}%)", disp_diff, pct);
-    let ccol = if disp_diff > 0.005 { palette::GREEN } else if disp_diff < -0.005 { palette::RED } else { Color::white(0.36) };
+    let d = value - from;
+    let sign = if d >= 0.0 { "+" } else { "" };
+    let pct = if from > 0.0 { d / from * 100.0 } else { 0.0 };
+    let chg_str = format!("{sign}${:.2} ({sign}{:.2}%)", d, pct);
+    let ccol = if d > 0.005 { palette::GREEN } else if d < -0.005 { palette::RED } else { Color::white(0.36) };
     let chg_st = TextStyle::body().weight(Weight::Semibold).tabular().color(ccol);
     let cw2 = ui.c.measure(&chg_str, &chg_st, 250.0).0.ceil();
     ui.c.text(&chg_str, Rect::new(r.x + pw + 10.0, py + 2.0, (r.right() - r.x - pw - 10.0).max(0.0), 22.0), &chg_st);
-
-    if let Some(when) = when_label {
+    if let Some(when) = when {
         let wx = r.x + pw + 10.0 + cw2 + 8.0;
         ui.c.text(&when, Rect::new(wx, py + 3.0, (r.right() - wx).max(0.0), 22.0), &TextStyle::footnote().color(palette::TEXT_FAINT));
     }
 
-    // 5. Interactive Chart rendering
-    if pts_data.len() >= 2 {
-        if let Some((lo, hi)) = stocks::bounds(pts_data.iter().copied(), Some(q.prev)) {
-            let y_map = |v: f64| chart_r.bottom() - ((v - lo) / (hi - lo)) as f32 * chart_r.h;
-            dotted(ui, chart_r.x, chart_r.right(), y_map(q.prev).round() + 0.5, Color::white(0.28));
-
-            let n_pts = (pts_data.len() - 1) as f32;
-            let pts: Vec<(f32, f32)> = pts_data.iter().enumerate().map(|(i, &v)| (chart_r.x + (i as f32 / n_pts) * chart_r.w, y_map(v))).collect();
-
-            let col = match q.trend() {
-                Trend::Up => palette::GREEN,
-                Trend::Down => palette::RED,
-                Trend::Flat => Color::white(0.36),
-            };
-            draw_line(ui, &pts, col, chart_r.y, chart_r.bottom() + 4.0, 1.85, Some(0.30));
-
-            // Native hairline cursor on hover/scrubbing
-            if let Some(idx) = scrub {
-                if let Some(&p) = pts.get(idx) {
-                    ui.c.line(Point::new(p.0, chart_r.y - 2.0), Point::new(p.0, chart_r.bottom()), Color::white(0.32), 1.0);
-                    ui.c.fill_circle(Point::new(p.0, p.1), 5.0, palette::ISLAND);
-                    ui.c.fill_circle(Point::new(p.0, p.1), 3.5, col);
-                }
-            }
-        }
-    }
-
-    // 6. Chart Axis
+    // 5. Chart Axis
+    let axis = Rect::new(chart.x, chart.bottom() + 4.0, chart.w, AXIS_H);
+    let (a, b) = line.ends();
     let axis_st = TextStyle::caption().color(palette::TEXT_FAINT);
-    let left_lbl = match range {
-        Range::Day => "9:30 AM",
-        Range::Month => "1 Mo Ago",
-        Range::HalfYear => "6 Mo Ago",
-        Range::Year => "1 Yr Ago",
-    };
-    let right_lbl = match range {
-        Range::Day => "4:00 PM",
-        _ => "Today",
-    };
-    ui.c.text(left_lbl, Rect::new(chart_r.x, chart_r.bottom() + 4.0, 70.0, AXIS_H), &axis_st);
-    ui.c.text("NYSE / NASDAQ · USD", Rect::new(chart_r.x, chart_r.bottom() + 4.0, chart_r.w, AXIS_H), &axis_st.center());
-    ui.c.text(right_lbl, Rect::new(chart_r.right() - 70.0, chart_r.bottom() + 4.0, 70.0, AXIS_H), &axis_st.right());
+    ui.c.text(&a, axis, &axis_st);
+    ui.c.text("NYSE / NASDAQ · USD", axis, &axis_st.center());
+    ui.c.text(&b, axis, &axis_st.right());
 
-    // 7. Day stats
+    // 6. Stats
     us_stocks_stats(ui, &q, Rect::new(r.x, r.y + STATS_Y, r.w, (r.h - STATS_Y).max(2.0 * STAT_H)));
 }
 
@@ -1619,8 +1695,9 @@ fn us_stocks_stats(ui: &mut Ui, q: &poni_core::us_stocks::UsStockQuote, r: Rect)
         None => "-".to_string(),
     };
     let (w52_lo, w52_hi) = q.w52.unwrap_or((q.price * 0.85, q.price * 1.15));
+    let open_val = q.open.or_else(|| q.spark.first().map(|p| f64::from(p.1))).or(q.low);
     let cells = [
-        ("Open", fmt_opt(q.low.map(|l| (l + q.prev) / 2.0))),
+        ("Open", fmt_opt(open_val)),
         ("Day High", fmt_opt(q.high)),
         ("Day Low", fmt_opt(q.low)),
         ("Prev Close", format!("${:.2}", q.prev)),
@@ -1642,4 +1719,3 @@ fn us_stocks_stats(ui: &mut Ui, q: &poni_core::us_stocks::UsStockQuote, r: Rect)
         ui.c.text(value, Rect::new(cell.x, cell.y + 15.0, cell.w, 15.0), &value_st);
     }
 }
-
