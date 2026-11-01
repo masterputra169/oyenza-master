@@ -16,7 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.21";
 const TIMEOUT: Duration = Duration::from_secs(6);
-const REFRESH_GAP: Duration = Duration::from_secs(120); // 2 minutes while open
+const REFRESH_GAP: Duration = Duration::from_secs(120);
+pub const DOLLARKILAT_ENDPOINT: &str = "https://api.dollarkilat.xyz";
+ // 2 minutes while open
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Watch {
@@ -120,10 +122,27 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
             if let Some(ref client) = http {
-                let mut rates_map = HashMap::new();
-                let mut feeds = CommodityFeeds::default();
+                // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz)
+                let mut direct_board = None;
+                let dk_forex_url = format!("{DOLLARKILAT_ENDPOINT}/v1/forex/board?symbols={}", watch.symbols.join(","));
+                if let Ok(resp) = client.get(&dk_forex_url, TIMEOUT) {
+                    if resp.status == 200 {
+                        if let Ok(b) = serde_json::from_str::<ForexBoard>(&resp.body) {
+                            if !b.quotes.is_empty() {
+                                direct_board = Some(b);
+                            }
+                        }
+                    }
+                }
 
-                // 1. Primary FX provider: open.er-api.com
+                if let Some(board) = direct_board {
+                    sink.send(AppEvent::Forex(board));
+                    board_delivered = true;
+                } else {
+                    let mut rates_map = HashMap::new();
+                    let mut feeds = CommodityFeeds::default();
+
+                    // Fallback 1: open.er-api.com
                 if let Ok(resp) = client.get("https://open.er-api.com/v6/latest/USD", TIMEOUT) {
                     if resp.status == 200 {
                         if let Ok(er) = serde_json::from_str::<ExchangeApiResponse>(&resp.body) {
@@ -200,17 +219,18 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     latest_idr = idr;
                 }
 
-                let board = if !rates_map.is_empty() {
-                    if !watch.symbols.is_empty() {
-                        ForexBoard::from_rates_feeds_and_symbols(&rates_map, &feeds, &watch.symbols, now_unix)
+                    let board = if !rates_map.is_empty() {
+                        if !watch.symbols.is_empty() {
+                            ForexBoard::from_rates_feeds_and_symbols(&rates_map, &feeds, &watch.symbols, now_unix)
+                        } else {
+                            ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
+                        }
                     } else {
-                        ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
-                    }
-                } else {
-                    ForexBoard::default_board()
-                };
-                sink.send(AppEvent::Forex(board));
-                board_delivered = true;
+                        ForexBoard::default_board()
+                    };
+                    sink.send(AppEvent::Forex(board));
+                    board_delivered = true;
+                }
             } else {
                 sink.send(AppEvent::Forex(ForexBoard::default_board()));
                 board_delivered = true;
@@ -222,7 +242,23 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             let needs_fetch = history_cache.get(sym).map_or(true, |t| t.elapsed() > Duration::from_secs(300));
             if needs_fetch {
                 if let Some(ref client) = http {
-                    if let Some(closes) = fetch_symbol_history(client, sym, latest_idr) {
+                    let mut history = None;
+                    let dk_hist_url = format!("{DOLLARKILAT_ENDPOINT}/v1/forex/history?symbol={sym}&range=1y");
+                    if let Ok(resp) = client.get(&dk_hist_url, TIMEOUT) {
+                        if resp.status == 200 {
+                            #[derive(serde::Deserialize)]
+                            struct DkForexHist {
+                                closes: Vec<(i32, f64)>,
+                            }
+                            if let Ok(parsed) = serde_json::from_str::<DkForexHist>(&resp.body) {
+                                history = Some(parsed.closes);
+                            }
+                        }
+                    }
+                    if history.is_none() {
+                        history = fetch_symbol_history(client, sym, latest_idr);
+                    }
+                    if let Some(closes) = history {
                         history_cache.insert(sym.clone(), Instant::now());
                         sink.send(AppEvent::ForexHistory(poni_core::forex::ForexHistory {
                             symbol: sym.clone(),

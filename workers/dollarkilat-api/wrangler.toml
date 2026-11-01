@@ -1,0 +1,12 @@
+name = "dollarkilat-api"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Bind to custom domain api.dollarkilat.xyz in Cloudflare
+routes = [
+  { pattern = "api.dollarkilat.xyz/*", zone_name = "dollarkilat.xyz" }
+]
+
+[vars]
+ENVIRONMENT = "production"
+APP_NAME = "DollarKilat Centralized Market Hub"

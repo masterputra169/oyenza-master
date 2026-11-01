@@ -16,7 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.22";
 const TIMEOUT: Duration = Duration::from_secs(6);
-const REFRESH_GAP: Duration = Duration::from_secs(60); // 60 seconds while open
+const REFRESH_GAP: Duration = Duration::from_secs(60);
+pub const DOLLARKILAT_ENDPOINT: &str = "https://api.dollarkilat.xyz";
+ // 60 seconds while open
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Watch {
@@ -110,27 +112,46 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
         if let Some(ref client) = http {
             let mut quotes = Vec::new();
 
-            for sym in &codes {
-                let sym_upper = sym.to_ascii_uppercase();
-                let default_name = us_stocks::name_for(&sym_upper).to_string();
-                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym_upper}?interval=5m&range=1d");
-                if let Ok(resp) = client.get(&url, TIMEOUT) {
-                    if resp.status == 200 {
-                        if let Ok(chart) = us_stocks::parse_yahoo_chart_json(&resp.body) {
-                            if chart.price > 0.0 {
-                                let name = chart.short_name.unwrap_or(default_name);
-                                quotes.push(UsStockQuote {
-                                    symbol: sym_upper,
-                                    name,
-                                    price: chart.price,
-                                    prev: chart.prev,
-                                    high: chart.high,
-                                    low: chart.low,
-                                    volume: chart.volume,
-                                    w52: chart.w52,
-                                    spark: chart.spark,
-                                    open: chart.open,
-                                });
+            // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz)
+            let dk_url = format!("{DOLLARKILAT_ENDPOINT}/v1/us-stocks/quotes?symbols={}", codes.join(","));
+            if let Ok(resp) = client.get(&dk_url, TIMEOUT) {
+                if resp.status == 200 {
+                    #[derive(serde::Deserialize)]
+                    struct DkUsBoard {
+                        quotes: Vec<UsStockQuote>,
+                    }
+                    if let Ok(board) = serde_json::from_str::<DkUsBoard>(&resp.body) {
+                        if !board.quotes.is_empty() {
+                            quotes = board.quotes;
+                        }
+                    }
+                }
+            }
+
+            // 2. Fallback: Direct Yahoo Finance if edge server not yet deployed or down
+            if quotes.is_empty() {
+                for sym in &codes {
+                    let sym_upper = sym.to_ascii_uppercase();
+                    let default_name = us_stocks::name_for(&sym_upper).to_string();
+                    let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym_upper}?interval=5m&range=1d");
+                    if let Ok(resp) = client.get(&url, TIMEOUT) {
+                        if resp.status == 200 {
+                            if let Ok(chart) = us_stocks::parse_yahoo_chart_json(&resp.body) {
+                                if chart.price > 0.0 {
+                                    let name = chart.short_name.unwrap_or(default_name);
+                                    quotes.push(UsStockQuote {
+                                        symbol: sym_upper,
+                                        name,
+                                        price: chart.price,
+                                        prev: chart.prev,
+                                        high: chart.high,
+                                        low: chart.low,
+                                        volume: chart.volume,
+                                        w52: chart.w52,
+                                        spark: chart.spark,
+                                        open: chart.open,
+                                    });
+                                }
                             }
                         }
                     }
@@ -154,19 +175,35 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             if let Some(ref pick) = watch.chart {
                 let should_fetch = history_cache.get(pick).map_or(true, |t| t.elapsed() > Duration::from_secs(1800));
                 if should_fetch {
-                    let hist_url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{pick}?interval=1d&range=1y");
-                    if let Ok(resp) = client.get(&hist_url, TIMEOUT) {
+                    let mut points = Vec::new();
+                    let dk_hist_url = format!("{DOLLARKILAT_ENDPOINT}/v1/us-stocks/history?symbol={pick}&range=1y");
+                    if let Ok(resp) = client.get(&dk_hist_url, TIMEOUT) {
                         if resp.status == 200 {
-                            if let Ok(points) = us_stocks::parse_yahoo_history_json(&resp.body) {
-                                    if !points.is_empty() {
-                                        history_cache.insert(pick.clone(), Instant::now());
-                                        sink.send(AppEvent::UsStocksHistory {
-                                            symbol: pick.clone(),
-                                            points,
-                                        });
-                                    }
-                                }
+                            #[derive(serde::Deserialize)]
+                            struct DkHist {
+                                closes: Vec<(i32, f64)>,
+                            }
+                            if let Ok(parsed) = serde_json::from_str::<DkHist>(&resp.body) {
+                                points = parsed.closes;
+                            }
                         }
+                    }
+                    if points.is_empty() {
+                        let hist_url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{pick}?interval=1d&range=1y");
+                        if let Ok(resp) = client.get(&hist_url, TIMEOUT) {
+                            if resp.status == 200 {
+                                if let Ok(pts) = us_stocks::parse_yahoo_history_json(&resp.body) {
+                                    points = pts;
+                                }
+                            }
+                        }
+                    }
+                    if !points.is_empty() {
+                        history_cache.insert(pick.clone(), Instant::now());
+                        sink.send(AppEvent::UsStocksHistory {
+                            symbol: pick.clone(),
+                            points,
+                        });
                     }
                 }
             }

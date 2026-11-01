@@ -1,0 +1,16 @@
+{
+  "name": "dollarkilat-api",
+  "version": "1.0.0",
+  "description": "Centralized market data aggregator & edge cache for Oyenza Master on api.dollarkilat.xyz",
+  "main": "worker.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": ["cloudflare", "worker", "market-data", "stocks", "forex", "crypto"],
+  "author": "Master Putra <dollarkilat.xyz>",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.84.0"
+  }
+}
