@@ -500,35 +500,59 @@ async function handleForexHistory(symbol) {
   return { symbol, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// 8. Crypto Board via Binance Vision API (Parallel per-symbol fetch - 100% resilient)
+// 8. Crypto Board via Yahoo Finance Chart Meta & Binance Vision (100% resilient)
 async function handleCryptoBoard(symbols) {
   if (symbols.length === 0) return { quotes: [] };
 
   const results = await Promise.all(
     symbols.map(async (code) => {
       try {
-        const clean = code.trim().toUpperCase();
-        const pair = `${clean}USDT`;
-        const url = `https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${pair}`;
-        const res = await fetch(url, { headers: { "User-Agent": "DollarKilat-Hub/1.0" } });
-        if (!res.ok) return null;
-        const t = await res.json();
-        const price = parseFloat(t.lastPrice) || 0;
-        const prevClose = parseFloat(t.prevClosePrice) || price;
-        const high = parseFloat(t.highPrice) || price;
-        const low = parseFloat(t.lowPrice) || price;
-        const volume = parseFloat(t.volume) || 0;
-        const changePct = parseFloat(t.priceChangePercent) || 0;
+        const clean = code.trim().toUpperCase().replace(/USDT$/, "").replace(/-USD$/, "");
+        const yahooSymbol = `${clean}-USD`;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1d`;
+        const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+        if (res.ok) {
+          const json = await res.json();
+          const meta = json?.chart?.result?.[0]?.meta;
+          if (meta) {
+            const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+            const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+            const high = meta.regularMarketDayHigh ?? price;
+            const low = meta.regularMarketDayLow ?? price;
+            const volume = meta.regularMarketVolume ?? 0;
+            const change = price - prevClose;
+            const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
 
-        return {
-          code: clean,
-          price,
-          prev_close: prevClose,
-          high,
-          low,
-          volume,
-          change_pct: changePct,
-        };
+            return {
+              code: clean,
+              price,
+              prev_close: prevClose,
+              high,
+              low,
+              volume,
+              change_pct: changePct,
+            };
+          }
+        }
+
+        // Backup: Binance Vision
+        const bvRes = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${clean}USDT`);
+        if (bvRes.ok) {
+          const t = await bvRes.json();
+          const price = parseFloat(t.lastPrice) || 0;
+          const prevClose = parseFloat(t.prevClosePrice) || price;
+          return {
+            code: clean,
+            price,
+            prev_close: prevClose,
+            high: parseFloat(t.highPrice) || price,
+            low: parseFloat(t.lowPrice) || price,
+            volume: parseFloat(t.volume) || 0,
+            change_pct: parseFloat(t.priceChangePercent) || 0,
+          };
+        }
+
+        return null;
       } catch (_) {
         return null;
       }
