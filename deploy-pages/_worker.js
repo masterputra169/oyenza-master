@@ -500,7 +500,7 @@ async function handleForexHistory(symbol) {
   return { symbol, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// 8. Crypto Board via Yahoo Finance Chart Meta & Gate.io Fallback (Supports 3,000+ coins including HYPE)
+// 8. Crypto Board - PRIMARY: Binance Official -> FALLBACK: Gate.io -> FALLBACK: Yahoo Finance
 async function handleCryptoBoard(symbols) {
   if (symbols.length === 0) return { quotes: [] };
 
@@ -509,22 +509,22 @@ async function handleCryptoBoard(symbols) {
       try {
         const clean = code.trim().toUpperCase().replace(/USDT$/, "").replace(/-USD$/, "");
 
-        // 1. Try Yahoo Finance for major crypto
-        const yahooSymbol = `${clean}-USD`;
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1d`;
+        // 1. PRIMARY: Binance Official (Binance Vision API)
         try {
-          const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+          const pair = `${clean}USDT`;
+          const binanceUrl = `https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${pair}`;
+          const res = await fetch(binanceUrl, {
+            headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+          });
           if (res.ok) {
-            const json = await res.json();
-            const meta = json?.chart?.result?.[0]?.meta;
-            if (meta && meta.regularMarketPrice) {
-              const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
-              const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
-              const high = meta.regularMarketDayHigh ?? price;
-              const low = meta.regularMarketDayLow ?? price;
-              const volume = meta.regularMarketVolume ?? 0;
-              const change = price - prevClose;
-              const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+            const t = await res.json();
+            if (t && t.lastPrice) {
+              const price = parseFloat(t.lastPrice) || 0;
+              const prevClose = parseFloat(t.prevClosePrice) || price;
+              const high = parseFloat(t.highPrice) || price;
+              const low = parseFloat(t.lowPrice) || price;
+              const volume = parseFloat(t.volume) || 0;
+              const changePct = parseFloat(t.priceChangePercent) || 0;
 
               return {
                 code: clean,
@@ -539,10 +539,12 @@ async function handleCryptoBoard(symbols) {
           }
         } catch (_) {}
 
-        // 2. Try Gate.io for Hype coins, meme coins, and newly listed tokens (e.g. HYPE, PURR, NEIRO, etc.)
+        // 2. FALLBACK: Gate.io (For coins not listed on Binance, e.g. early DEX/meme tokens)
         try {
           const gateUrl = `https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${clean}_USDT`;
-          const gateRes = await fetch(gateUrl, { headers: { "User-Agent": USER_AGENT } });
+          const gateRes = await fetch(gateUrl, {
+            headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+          });
           if (gateRes.ok) {
             const gateData = await gateRes.json();
             const item = gateData?.[0];
@@ -567,22 +569,35 @@ async function handleCryptoBoard(symbols) {
           }
         } catch (_) {}
 
-        // 3. Backup: Binance Vision
+        // 3. FALLBACK: Yahoo Finance Chart Meta
         try {
-          const bvRes = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${clean}USDT`);
-          if (bvRes.ok) {
-            const t = await bvRes.json();
-            const price = parseFloat(t.lastPrice) || 0;
-            const prevClose = parseFloat(t.prevClosePrice) || price;
-            return {
-              code: clean,
-              price,
-              prev_close: prevClose,
-              high: parseFloat(t.highPrice) || price,
-              low: parseFloat(t.lowPrice) || price,
-              volume: parseFloat(t.volume) || 0,
-              change_pct: parseFloat(t.priceChangePercent) || 0,
-            };
+          const yahooSymbol = `${clean}-USD`;
+          const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1d`;
+          const yRes = await fetch(yahooUrl, {
+            headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+          });
+          if (yRes.ok) {
+            const json = await yRes.json();
+            const meta = json?.chart?.result?.[0]?.meta;
+            if (meta && meta.regularMarketPrice) {
+              const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+              const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+              const high = meta.regularMarketDayHigh ?? price;
+              const low = meta.regularMarketDayLow ?? price;
+              const volume = meta.regularMarketVolume ?? 0;
+              const change = price - prevClose;
+              const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+
+              return {
+                code: clean,
+                price,
+                prev_close: prevClose,
+                high,
+                low,
+                volume,
+                change_pct: changePct,
+              };
+            }
           }
         } catch (_) {}
 
@@ -606,21 +621,27 @@ const TOP_CRYPTO_LIST = [
   "AAVE", "MKR", "PENDLE", "RUNE", "JUP", "GALA", "SAND", "MANA", "AXS", "ENA"
 ];
 
-// 9. Crypto Search
+// 9. Crypto Search - PRIMARY: Binance Official -> FALLBACK: Gate.io
 async function handleCryptoSearch(query) {
   const q = (query || "").trim().toUpperCase();
   const matched = TOP_CRYPTO_LIST.filter((c) => !q || c.includes(q)).slice(0, 15);
 
   if (q && !matched.includes(q)) {
-    // Check Gate.io for new tokens
+    // 1. Check Binance first
     try {
-      const gateRes = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${q}_USDT`, {
-        headers: { "User-Agent": USER_AGENT },
+      const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${q}USDT`, {
+        headers: { "User-Agent": "DollarKilat-Hub/1.0" },
       });
-      if (gateRes.ok) {
-        const data = await gateRes.json();
-        if (data?.[0]?.last) {
-          matched.unshift(q);
+      if (res.ok) {
+        matched.unshift(q);
+      } else {
+        // 2. Fallback check Gate.io
+        const gateRes = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${q}_USDT`, {
+          headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+        });
+        if (gateRes.ok) {
+          const data = await gateRes.json();
+          if (data?.[0]?.last) matched.unshift(q);
         }
       }
     } catch (_) {}
