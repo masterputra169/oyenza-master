@@ -500,7 +500,7 @@ async function handleForexHistory(symbol) {
   return { symbol, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// 8. Crypto Board via Yahoo Finance Chart Meta & Binance Vision (100% resilient)
+// 8. Crypto Board via Yahoo Finance Chart Meta & Gate.io Fallback (Supports 3,000+ coins including HYPE)
 async function handleCryptoBoard(symbols) {
   if (symbols.length === 0) return { quotes: [] };
 
@@ -508,49 +508,83 @@ async function handleCryptoBoard(symbols) {
     symbols.map(async (code) => {
       try {
         const clean = code.trim().toUpperCase().replace(/USDT$/, "").replace(/-USD$/, "");
+
+        // 1. Try Yahoo Finance for major crypto
         const yahooSymbol = `${clean}-USD`;
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1d`;
-        const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-        if (res.ok) {
-          const json = await res.json();
-          const meta = json?.chart?.result?.[0]?.meta;
-          if (meta) {
-            const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
-            const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
-            const high = meta.regularMarketDayHigh ?? price;
-            const low = meta.regularMarketDayLow ?? price;
-            const volume = meta.regularMarketVolume ?? 0;
-            const change = price - prevClose;
-            const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+        try {
+          const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+          if (res.ok) {
+            const json = await res.json();
+            const meta = json?.chart?.result?.[0]?.meta;
+            if (meta && meta.regularMarketPrice) {
+              const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+              const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+              const high = meta.regularMarketDayHigh ?? price;
+              const low = meta.regularMarketDayLow ?? price;
+              const volume = meta.regularMarketVolume ?? 0;
+              const change = price - prevClose;
+              const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
 
+              return {
+                code: clean,
+                price,
+                prev_close: prevClose,
+                high,
+                low,
+                volume,
+                change_pct: changePct,
+              };
+            }
+          }
+        } catch (_) {}
+
+        // 2. Try Gate.io for Hype coins, meme coins, and newly listed tokens (e.g. HYPE, PURR, NEIRO, etc.)
+        try {
+          const gateUrl = `https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${clean}_USDT`;
+          const gateRes = await fetch(gateUrl, { headers: { "User-Agent": USER_AGENT } });
+          if (gateRes.ok) {
+            const gateData = await gateRes.json();
+            const item = gateData?.[0];
+            if (item && item.last) {
+              const price = parseFloat(item.last) || 0;
+              const changePct = parseFloat(item.change_percentage) || 0;
+              const high = parseFloat(item.high_24h) || price;
+              const low = parseFloat(item.low_24h) || price;
+              const volume = parseFloat(item.base_volume) || 0;
+              const prevClose = price / (1 + changePct / 100);
+
+              return {
+                code: clean,
+                price,
+                prev_close: prevClose,
+                high,
+                low,
+                volume,
+                change_pct: changePct,
+              };
+            }
+          }
+        } catch (_) {}
+
+        // 3. Backup: Binance Vision
+        try {
+          const bvRes = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${clean}USDT`);
+          if (bvRes.ok) {
+            const t = await bvRes.json();
+            const price = parseFloat(t.lastPrice) || 0;
+            const prevClose = parseFloat(t.prevClosePrice) || price;
             return {
               code: clean,
               price,
               prev_close: prevClose,
-              high,
-              low,
-              volume,
-              change_pct: changePct,
+              high: parseFloat(t.highPrice) || price,
+              low: parseFloat(t.lowPrice) || price,
+              volume: parseFloat(t.volume) || 0,
+              change_pct: parseFloat(t.priceChangePercent) || 0,
             };
           }
-        }
-
-        // Backup: Binance Vision
-        const bvRes = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${clean}USDT`);
-        if (bvRes.ok) {
-          const t = await bvRes.json();
-          const price = parseFloat(t.lastPrice) || 0;
-          const prevClose = parseFloat(t.prevClosePrice) || price;
-          return {
-            code: clean,
-            price,
-            prev_close: prevClose,
-            high: parseFloat(t.highPrice) || price,
-            low: parseFloat(t.lowPrice) || price,
-            volume: parseFloat(t.volume) || 0,
-            change_pct: parseFloat(t.priceChangePercent) || 0,
-          };
-        }
+        } catch (_) {}
 
         return null;
       } catch (_) {
@@ -563,10 +597,10 @@ async function handleCryptoBoard(symbols) {
   return { quotes, updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// Top 50 Popular Crypto for instant search catalog
+// Top Popular Crypto list (includes HYPE)
 const TOP_CRYPTO_LIST = [
   "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "SUI", "LINK",
-  "SHIB", "PEPE", "NEAR", "APT", "DOT", "LTC", "BCH", "UNI", "TRX", "TON",
+  "HYPE", "SHIB", "PEPE", "NEAR", "APT", "DOT", "LTC", "BCH", "UNI", "TRX", "TON",
   "RENDER", "FET", "ICP", "TIA", "ARB", "OP", "INJ", "KAS", "FTM", "XLM",
   "ALGO", "HBAR", "VET", "FIL", "ATOM", "WIF", "BONK", "FLOKI", "SEI", "STX",
   "AAVE", "MKR", "PENDLE", "RUNE", "JUP", "GALA", "SAND", "MANA", "AXS", "ENA"
@@ -578,12 +612,16 @@ async function handleCryptoSearch(query) {
   const matched = TOP_CRYPTO_LIST.filter((c) => !q || c.includes(q)).slice(0, 15);
 
   if (q && !matched.includes(q)) {
+    // Check Gate.io for new tokens
     try {
-      const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${q}USDT`, {
-        headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+      const gateRes = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${q}_USDT`, {
+        headers: { "User-Agent": USER_AGENT },
       });
-      if (res.ok) {
-        matched.unshift(q);
+      if (gateRes.ok) {
+        const data = await gateRes.json();
+        if (data?.[0]?.last) {
+          matched.unshift(q);
+        }
       }
     } catch (_) {}
   }
