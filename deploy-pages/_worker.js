@@ -500,63 +500,69 @@ async function handleForexHistory(symbol) {
   return { symbol, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }
 
-// 8. Crypto Board via Binance Vision API (No datacenter/geo block)
+// 8. Crypto Board via Binance Vision API (Parallel per-symbol fetch - 100% resilient)
 async function handleCryptoBoard(symbols) {
   if (symbols.length === 0) return { quotes: [] };
-  const pairMap = {};
-  const formattedPairs = [];
-  symbols.forEach((s) => {
-    const pair = `${s}USDT`;
-    pairMap[pair] = s;
-    formattedPairs.push(`"${pair}"`);
-  });
 
-  const queryUrl = `https://data-api.binance.vision/api/v3/ticker/24hr?symbols=[${encodeURIComponent(formattedPairs.join(","))}]`;
-  let res = await fetch(queryUrl, { headers: { "User-Agent": USER_AGENT } });
+  const results = await Promise.all(
+    symbols.map(async (code) => {
+      try {
+        const clean = code.trim().toUpperCase();
+        const pair = `${clean}USDT`;
+        const url = `https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${pair}`;
+        const res = await fetch(url, { headers: { "User-Agent": "DollarKilat-Hub/1.0" } });
+        if (!res.ok) return null;
+        const t = await res.json();
+        const price = parseFloat(t.lastPrice) || 0;
+        const prevClose = parseFloat(t.prevClosePrice) || price;
+        const high = parseFloat(t.highPrice) || price;
+        const low = parseFloat(t.lowPrice) || price;
+        const volume = parseFloat(t.volume) || 0;
+        const changePct = parseFloat(t.priceChangePercent) || 0;
 
-  if (!res.ok) {
-    res = await fetch("https://data-api.binance.vision/api/v3/ticker/24hr", { headers: { "User-Agent": USER_AGENT } });
-  }
-  if (!res.ok) throw new Error(`Binance API returned HTTP ${res.status}`);
-
-  const allTickers = await res.json();
-  const quotes = allTickers
-    .filter((t) => pairMap[t.symbol])
-    .map((t) => {
-      const code = pairMap[t.symbol];
-      const price = parseFloat(t.lastPrice) || 0;
-      const prevClose = parseFloat(t.prevClosePrice) || price;
-      const high = parseFloat(t.highPrice) || price;
-      const low = parseFloat(t.lowPrice) || price;
-      const volume = parseFloat(t.volume) || 0;
-      const changePct = parseFloat(t.priceChangePercent) || 0;
-
-      return {
-        code,
-        price,
-        prev_close: prevClose,
-        high,
-        low,
-        volume,
-        change_pct: changePct,
-      };
+        return {
+          code: clean,
+          price,
+          prev_close: prevClose,
+          high,
+          low,
+          volume,
+          change_pct: changePct,
+        };
+      } catch (_) {
+        return null;
+      }
     })
-    .filter(Boolean);
+  );
 
+  const quotes = results.filter(Boolean);
   return { quotes, updated_at: Math.floor(Date.now() / 1000) };
 }
+
+// Top 50 Popular Crypto for instant search catalog
+const TOP_CRYPTO_LIST = [
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "SUI", "LINK",
+  "SHIB", "PEPE", "NEAR", "APT", "DOT", "LTC", "BCH", "UNI", "TRX", "TON",
+  "RENDER", "FET", "ICP", "TIA", "ARB", "OP", "INJ", "KAS", "FTM", "XLM",
+  "ALGO", "HBAR", "VET", "FIL", "ATOM", "WIF", "BONK", "FLOKI", "SEI", "STX",
+  "AAVE", "MKR", "PENDLE", "RUNE", "JUP", "GALA", "SAND", "MANA", "AXS", "ENA"
+];
 
 // 9. Crypto Search
 async function handleCryptoSearch(query) {
   const q = (query || "").trim().toUpperCase();
-  const res = await fetch("https://data-api.binance.vision/api/v3/ticker/price", { headers: { "User-Agent": USER_AGENT } });
-  if (!res.ok) return { results: [] };
-  const all = await res.json();
-  const usdtPairs = all
-    .filter((p) => p.symbol.endsWith("USDT"))
-    .map((p) => p.symbol.replace("USDT", ""))
-    .filter((c) => !q || c.includes(q))
-    .slice(0, 15);
+  const matched = TOP_CRYPTO_LIST.filter((c) => !q || c.includes(q)).slice(0, 15);
 
-  return { query: q, results: usdtPairs };
+  if (q && !matched.includes(q)) {
+    try {
+      const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${q}USDT`, {
+        headers: { "User-Agent": "DollarKilat-Hub/1.0" },
+      });
+      if (res.ok) {
+        matched.unshift(q);
+      }
+    } catch (_) {}
+  }
+
+  return { query: q, results: matched };
 }
