@@ -28,6 +28,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const STORE_VERSION: u32 = 1;
 
+fn default_api_endpoint() -> String {
+    "https://api.dollarkilat.xyz".to_string()
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
@@ -57,6 +61,9 @@ pub struct Store {
     /// Persisted Forex & Commodities watchlist.
     #[serde(default)]
     pub forex: crate::forex::ForexWatchlist,
+    /// Centralized market data API endpoint.
+    #[serde(default = "default_api_endpoint")]
+    pub api_endpoint: String,
     /// Ticker pinned to the idle notch / island (e.g. crypto coin or IDX stock).
     #[serde(default)]
     pub ticker: Option<TickerPin>,
@@ -89,6 +96,7 @@ impl Default for Store {
             crypto: crate::crypto::CryptoWatchlist::default(),
             us_stocks: crate::us_stocks::UsStockWatchlist::default(),
             forex: crate::forex::ForexWatchlist::default(),
+            api_endpoint: default_api_endpoint(),
             ticker: None,
             alerts: Vec::new(),
             weather: None,

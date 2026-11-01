@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 const USER_AGENT: &str = concat!("OyenzaStudio/", env!("CARGO_PKG_VERSION"), " (+https://github.com/lucacadalora/oyenza-studio)");
 const TIMEOUT: Duration = Duration::from_secs(8);
 const REFRESH_GAP: Duration = Duration::from_secs(15);
+pub const DOLLARKILAT_ENDPOINT: &str = "https://api.dollarkilat.xyz";
+
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Watch {
@@ -112,15 +114,73 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         // 1. Fetch 24hr tickers + real 30m intraday sparklines for the watch codes
         if !watch.codes.is_empty() {
-            let mut symbols = Vec::new();
-            for c in &watch.codes {
-                symbols.push(format!("\"{}USDT\"", c.to_ascii_uppercase()));
-            }
-            let query = format!("ticker/24hr?symbols=[{}]", symbols.join(","));
             last_ask = Instant::now();
             let mut delivered = false;
             if let Some(ref client) = http {
-                let ticker_body = fetch_binance(client, &query).or_else(|| fetch_binance(client, "ticker/24hr"));
+                // Try Centralized Edge Hub (api.dollarkilat.xyz) first
+                let dk_url = format!("{DOLLARKILAT_ENDPOINT}/v1/crypto/board?symbols={}", watch.codes.join(","));
+                if let Ok(resp) = client.get(&dk_url, TIMEOUT) {
+                    if resp.status == 200 {
+                        #[derive(serde::Deserialize)]
+                        struct DkCryptoItem {
+                            code: String,
+                            price: f64,
+                            prev_close: f64,
+                            high: f64,
+                            low: f64,
+                            volume: f64,
+                            #[serde(default)]
+                            #[allow(dead_code)]
+                            change_pct: f64,
+                        }
+                        #[derive(serde::Deserialize)]
+                        struct DkCryptoBoard {
+                            quotes: Vec<DkCryptoItem>,
+                        }
+                        if let Ok(b) = serde_json::from_str::<DkCryptoBoard>(&resp.body) {
+                            if !b.quotes.is_empty() {
+                                let mut quotes = Vec::new();
+                                for item in b.quotes {
+                                    let spark = spark_cache.get(&item.code.to_ascii_uppercase()).map(|(_, s)| s.clone()).unwrap_or_else(|| crypto::synthetic_spark(&item.code, item.prev_close, item.price, item.low, item.high));
+                                    quotes.push(CryptoQuote {
+                                        code: item.code.clone(),
+                                        name: crypto::coin_name(&item.code).to_string(),
+                                        price: item.price,
+                                        prev_close: item.prev_close,
+                                        open: item.prev_close,
+                                        high: item.high,
+                                        low: item.low,
+                                        volume: item.volume,
+                                        quote_volume: item.volume * item.price,
+                                        market_cap: item.price * 1_000_000.0,
+                                        spark,
+                                    });
+                                }
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(1793374000);
+                                sink.send(AppEvent::Crypto(CryptoEvent::Board(CryptoBoard {
+                                    quotes,
+                                    at: now,
+                                    missing: Vec::new(),
+                                })));
+                                delivered = true;
+                            }
+                        }
+                    }
+                }
+
+                let mut symbols = Vec::new();
+                for c in &watch.codes {
+                    symbols.push(format!("\"{}USDT\"", c.to_ascii_uppercase()));
+                }
+                let query = format!("ticker/24hr?symbols=[{}]", symbols.join(","));
+                let ticker_body = if !delivered {
+                    fetch_binance(client, &query).or_else(|| fetch_binance(client, "ticker/24hr"))
+                } else {
+                    None
+                };
                 if let Some(ref body) = ticker_body {
                     if let Ok(board) = parse_binance_tickers(body, &watch.codes, &spark_cache) {
                         sink.send(AppEvent::Crypto(CryptoEvent::Board(board)));
