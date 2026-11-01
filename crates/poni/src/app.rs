@@ -2161,8 +2161,9 @@ if self.grab.is_some() {
         } else {
             None
         };
+        let symbols = self.st.store.forex.symbols.clone();
         if let Some(s) = self.services.as_ref() {
-            s.forex_watch(services::forex::Watch { open, chart });
+            s.forex_watch(services::forex::Watch { open, chart, symbols });
         }
     }
 
@@ -2179,8 +2180,9 @@ if self.grab.is_some() {
         } else {
             None
         };
+        let codes = self.st.store.us_stocks.codes.clone();
         if let Some(s) = self.services.as_ref() {
-            s.us_stocks_watch(services::us_stocks::Watch { open, chart });
+            s.us_stocks_watch(services::us_stocks::Watch { open, chart, codes });
         }
     }
 

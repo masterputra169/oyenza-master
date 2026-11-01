@@ -12,6 +12,9 @@ pub const TROY_OUNCE_GRAMS: f64 = 31.1034768;
 /// Antam physical gold manufacturing & tax premium over international spot.
 pub const ANTAM_PREMIUM_FACTOR: f64 = 1.035;
 
+/// Maximum number of forex & commodities a user can hold in their watchlist.
+pub const MAX_FOREX: usize = 20;
+
 /// Default watchlist order for Forex & Commodities.
 pub const DEFAULT_SYMBOLS: &[&str] = &[
     "USD/IDR",
@@ -27,6 +30,141 @@ pub const DEFAULT_SYMBOLS: &[&str] = &[
     "AUD/IDR",
     "GBP/IDR",
 ];
+
+/// Top currencies and commodities available for search & addition.
+pub const KNOWN_FOREX_ITEMS: [(&str, &str); 28] = [
+    ("USD/IDR", "US Dollar"),
+    ("GOLD", "Gold (Antam / g)"),
+    ("SILVER", "Silver (Spot / g)"),
+    ("OIL", "WTI Crude Oil (USD)"),
+    ("SGD/IDR", "Singapore Dollar"),
+    ("EUR/IDR", "Euro"),
+    ("JPY/IDR", "Japanese Yen (100)"),
+    ("SAR/IDR", "Saudi Riyal"),
+    ("MYR/IDR", "Malaysian Ringgit"),
+    ("CNY/IDR", "Chinese Yuan"),
+    ("AUD/IDR", "Australian Dollar"),
+    ("GBP/IDR", "British Pound"),
+    ("CHF/IDR", "Swiss Franc"),
+    ("CAD/IDR", "Canadian Dollar"),
+    ("HKD/IDR", "Hong Kong Dollar"),
+    ("KRW/IDR", "South Korean Won (100)"),
+    ("THB/IDR", "Thai Baht"),
+    ("NZD/IDR", "New Zealand Dollar"),
+    ("TWD/IDR", "New Taiwan Dollar"),
+    ("INR/IDR", "Indian Rupee"),
+    ("AED/IDR", "UAE Dirham"),
+    ("TRY/IDR", "Turkish Lira"),
+    ("PHP/IDR", "Philippine Peso"),
+    ("PLATINUM", "Platinum Spot (per g)"),
+    ("BRENT", "Brent Crude Oil (USD)"),
+    ("NATURAL_GAS", "Natural Gas (USD)"),
+    ("COPPER", "Copper Spot (USD/lb)"),
+    ("PALLADIUM", "Palladium Spot (per g)"),
+];
+
+/// The user's persisted Forex & Commodities watchlist.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ForexWatchlist {
+    pub symbols: Vec<String>,
+    pub pick: String,
+    #[serde(default)]
+    pub show_pct: bool,
+    #[serde(default)]
+    pub range: crate::stocks::Range,
+}
+
+impl Default for ForexWatchlist {
+    fn default() -> Self {
+        Self {
+            symbols: DEFAULT_SYMBOLS.iter().map(|&s| s.to_string()).collect(),
+            pick: "USD/IDR".to_string(),
+            show_pct: true,
+            range: crate::stocks::Range::Day,
+        }
+    }
+}
+
+impl ForexWatchlist {
+    pub fn full(&self) -> bool {
+        self.symbols.len() >= MAX_FOREX
+    }
+
+    pub fn has(&self, sym: &str) -> bool {
+        let norm = normalize_symbol(sym);
+        self.symbols.iter().any(|s| normalize_symbol(s).eq_ignore_ascii_case(&norm))
+    }
+
+    pub fn add(&mut self, sym: &str) -> bool {
+        let norm = normalize_symbol(sym);
+        if self.full() || self.has(&norm) || norm.is_empty() {
+            return false;
+        }
+        self.symbols.push(norm);
+        true
+    }
+
+    pub fn remove(&mut self, sym: &str) {
+        let norm = normalize_symbol(sym);
+        if let Some(pos) = self.symbols.iter().position(|s| normalize_symbol(s).eq_ignore_ascii_case(&norm)) {
+            self.symbols.remove(pos);
+            if normalize_symbol(&self.pick).eq_ignore_ascii_case(&norm) {
+                self.pick = self.symbols.first().cloned().unwrap_or_else(|| "USD/IDR".to_string());
+            }
+        }
+    }
+
+    pub fn move_to(&mut self, sym: &str, target_idx: usize) {
+        let norm = normalize_symbol(sym);
+        if let Some(cur) = self.symbols.iter().position(|s| normalize_symbol(s).eq_ignore_ascii_case(&norm)) {
+            let item = self.symbols.remove(cur);
+            let to = target_idx.min(self.symbols.len());
+            self.symbols.insert(to, item);
+        }
+    }
+}
+
+/// Autocomplete and search helper over known currencies and commodities.
+pub fn search_forex(query: &str, skip: &[String]) -> Vec<(&'static str, &'static str)> {
+    let q = query.trim().to_ascii_uppercase();
+    let norm_skip: Vec<String> = skip.iter().map(|s| normalize_symbol(s)).collect();
+    if q.is_empty() {
+        return KNOWN_FOREX_ITEMS
+            .iter()
+            .copied()
+            .filter(|&(sym, _)| !norm_skip.iter().any(|x| x.eq_ignore_ascii_case(&normalize_symbol(sym))))
+            .collect();
+    }
+    let mut ranked: Vec<(u8, usize, &'static str, &'static str)> = Vec::new();
+    for (idx, &(sym, name)) in KNOWN_FOREX_ITEMS.iter().enumerate() {
+        let norm_sym = normalize_symbol(sym);
+        if norm_skip.iter().any(|x| x.eq_ignore_ascii_case(&norm_sym)) {
+            continue;
+        }
+        let su = sym.to_ascii_uppercase();
+        let nu = name.to_ascii_uppercase();
+        let rank = if su == q || norm_sym == q {
+            0
+        } else if su.starts_with(&q) || norm_sym.starts_with(&q) {
+            1
+        } else if nu == q {
+            2
+        } else if nu.starts_with(&q) {
+            3
+        } else if nu.split_whitespace().any(|w| w.starts_with(&q)) {
+            4
+        } else if su.contains(&q) || norm_sym.contains(&q) {
+            5
+        } else if nu.contains(&q) {
+            6
+        } else {
+            continue;
+        };
+        ranked.push((rank, idx, sym, name));
+    }
+    ranked.sort_by_key(|&(rank, idx, _, _)| (rank, idx));
+    ranked.into_iter().map(|(_, _, s, n)| (s, n)).collect()
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ForexQuote {
@@ -168,8 +306,13 @@ impl ForexBoard {
     }
 
     pub fn from_rates_and_feeds(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, now_unix: u64) -> Self {
+        let syms: Vec<String> = DEFAULT_SYMBOLS.iter().map(|&s| s.to_string()).collect();
+        Self::from_rates_feeds_and_symbols(rates, feeds, &syms, now_unix)
+    }
+
+    pub fn from_rates_feeds_and_symbols(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols: &[String], now_unix: u64) -> Self {
         let idr = *rates.get("IDR").unwrap_or(&18132.0);
-        let mut quotes = Vec::with_capacity(12);
+        let mut quotes = Vec::with_capacity(symbols.len());
 
         let build = |sym: &str, name: &str, rate: f64, def_pct: f64, is_gold: bool, unit: &str| -> ForexQuote {
             let pct = feeds.pcts.get(sym).copied().unwrap_or(def_pct);
@@ -187,54 +330,83 @@ impl ForexBoard {
             q
         };
 
-        // 1. USD/IDR
-        quotes.push(build("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));
-
-        // 2. GOLD (Antam / g)
-        let (gold_usd_oz, gold_pct) = feeds.gold_usd.unwrap_or((3898.9, -0.24));
-        let gold_idr_gram = (gold_usd_oz * idr / TROY_OUNCE_GRAMS) * ANTAM_PREMIUM_FACTOR;
-        quotes.push(build("GOLD", "Gold (Antam / g)", gold_idr_gram, gold_pct, true, "per 1 gram"));
-
-        // 3. SILVER (Antam / g)
-        let (silver_usd_oz, silver_pct) = feeds.silver_usd.unwrap_or((49.28, 0.45));
-        let silver_idr_gram = (silver_usd_oz * idr / TROY_OUNCE_GRAMS) * 1.05;
-        quotes.push(build("SILVER", "Silver (Spot / g)", silver_idr_gram, silver_pct, false, "per 1 gram"));
-
-        // 4. OIL (WTI Crude Oil)
-        let (oil_usd_barrel, oil_pct) = feeds.oil_usd.unwrap_or((74.50, -0.62));
-        quotes.push(build("OIL", "WTI Crude Oil", oil_usd_barrel, oil_pct, false, "per barrel (USD)"));
-
-        // 5. SGD/IDR
-        let sgd = rates.get("SGD").copied().filter(|&v| v > 0.0).unwrap_or(1.2782);
-        quotes.push(build("SGD/IDR", "Singapore Dollar", idr / sgd, 0.08, false, "per 1 SGD"));
-
-        // 6. EUR/IDR
-        let eur = rates.get("EUR").copied().filter(|&v| v > 0.0).unwrap_or(0.8956);
-        quotes.push(build("EUR/IDR", "Euro", idr / eur, -0.15, false, "per 1 EUR"));
-
-        // 7. JPY/IDR (per 100 JPY)
-        let jpy = rates.get("JPY").copied().filter(|&v| v > 0.0).unwrap_or(157.49);
-        quotes.push(build("JPY/IDR", "Japanese Yen (100)", (idr / jpy) * 100.0, 0.31, false, "per 100 JPY"));
-
-        // 8. SAR/IDR (Saudi Riyal)
-        let sar = rates.get("SAR").copied().filter(|&v| v > 0.0).unwrap_or(3.7500);
-        quotes.push(build("SAR/IDR", "Saudi Riyal", idr / sar, 0.05, false, "per 1 SAR"));
-
-        // 9. MYR/IDR
-        let myr = rates.get("MYR").copied().filter(|&v| v > 0.0).unwrap_or(4.3850);
-        quotes.push(build("MYR/IDR", "Malaysian Ringgit", idr / myr, 0.06, false, "per 1 MYR"));
-
-        // 10. CNY/IDR
-        let cny = rates.get("CNY").copied().filter(|&v| v > 0.0).unwrap_or(7.1250);
-        quotes.push(build("CNY/IDR", "Chinese Yuan", idr / cny, -0.04, false, "per 1 CNY"));
-
-        // 11. AUD/IDR
-        let aud = rates.get("AUD").copied().filter(|&v| v > 0.0).unwrap_or(1.5180);
-        quotes.push(build("AUD/IDR", "Australian Dollar", idr / aud, 0.18, false, "per 1 AUD"));
-
-        // 12. GBP/IDR
-        let gbp = rates.get("GBP").copied().filter(|&v| v > 0.0).unwrap_or(0.7715);
-        quotes.push(build("GBP/IDR", "British Pound", idr / gbp, -0.11, false, "per 1 GBP"));
+        for sym_raw in symbols {
+            let sym = normalize_symbol(sym_raw);
+            match sym.as_str() {
+                "USD/IDR" => {
+                    quotes.push(build("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));
+                }
+                "GOLD" => {
+                    let (gold_usd_oz, gold_pct) = feeds.gold_usd.unwrap_or((3898.9, -0.24));
+                    let gold_idr_gram = (gold_usd_oz * idr / TROY_OUNCE_GRAMS) * ANTAM_PREMIUM_FACTOR;
+                    quotes.push(build("GOLD", "Gold (Antam / g)", gold_idr_gram, gold_pct, true, "per 1 gram"));
+                }
+                "SILVER" => {
+                    let (silver_usd_oz, silver_pct) = feeds.silver_usd.unwrap_or((49.28, 0.45));
+                    let silver_idr_gram = (silver_usd_oz * idr / TROY_OUNCE_GRAMS) * 1.05;
+                    quotes.push(build("SILVER", "Silver (Spot / g)", silver_idr_gram, silver_pct, false, "per 1 gram"));
+                }
+                "OIL" => {
+                    let (oil_usd_barrel, oil_pct) = feeds.oil_usd.unwrap_or((74.50, -0.62));
+                    quotes.push(build("OIL", "WTI Crude Oil", oil_usd_barrel, oil_pct, false, "per barrel (USD)"));
+                }
+                "BRENT" => {
+                    let brent_usd = 78.40;
+                    quotes.push(build("BRENT", "Brent Crude Oil", brent_usd, -0.45, false, "per barrel (USD)"));
+                }
+                "PLATINUM" => {
+                    let plat_usd_g = 32.50;
+                    quotes.push(build("PLATINUM", "Platinum Spot / g", plat_usd_g * idr, 0.20, false, "per 1 gram"));
+                }
+                "PALLADIUM" => {
+                    let pal_usd_g = 35.80;
+                    quotes.push(build("PALLADIUM", "Palladium Spot / g", pal_usd_g * idr, -0.30, false, "per 1 gram"));
+                }
+                "NATURAL_GAS" => {
+                    quotes.push(build("NATURAL_GAS", "Natural Gas", 2.85, 1.10, false, "per MMBtu (USD)"));
+                }
+                "COPPER" => {
+                    quotes.push(build("COPPER", "Copper Spot", 4.38, 0.35, false, "per lb (USD)"));
+                }
+                other => {
+                    let cur_code = other.split('/').next().unwrap_or(other).to_ascii_uppercase();
+                    let cur_rate = rates.get(&cur_code).copied().filter(|&v| v > 0.0);
+                    let fallback_rate = match cur_code.as_str() {
+                        "SGD" => Some(1.2782),
+                        "EUR" => Some(0.8956),
+                        "JPY" => Some(157.49),
+                        "SAR" => Some(3.7500),
+                        "MYR" => Some(4.3850),
+                        "CNY" => Some(7.1250),
+                        "AUD" => Some(1.5180),
+                        "GBP" => Some(0.7715),
+                        "CHF" => Some(0.8650),
+                        "CAD" => Some(1.3850),
+                        "HKD" => Some(7.7720),
+                        "KRW" => Some(1375.0),
+                        "THB" => Some(33.80),
+                        "NZD" => Some(1.6850),
+                        "TWD" => Some(32.10),
+                        "INR" => Some(84.10),
+                        "AED" => Some(3.6725),
+                        "TRY" => Some(34.20),
+                        "PHP" => Some(58.30),
+                        _ => None,
+                    };
+                    let r = cur_rate.or(fallback_rate).unwrap_or(1.0);
+                    let (val, unit) = if cur_code == "JPY" || cur_code == "KRW" {
+                        ((idr / r) * 100.0, format!("per 100 {cur_code}"))
+                    } else if cur_code == "VND" {
+                        ((idr / r) * 1000.0, format!("per 1000 {cur_code}"))
+                    } else {
+                        (idr / r, format!("per 1 {cur_code}"))
+                    };
+                    let known_name = KNOWN_FOREX_ITEMS.iter().find(|(s, _)| s.starts_with(&cur_code)).map(|(_, n)| *n);
+                    let display_name = known_name.unwrap_or(other);
+                    quotes.push(build(&format!("{cur_code}/IDR"), display_name, val, 0.05, false, &unit));
+                }
+            }
+        }
 
         Self { quotes, updated_at: now_unix }
     }
@@ -376,5 +548,20 @@ mod tests {
 
         let sgd = board.quote("SGD/IDR").unwrap();
         assert!(sgd.rate > 14_000.0);
+    }
+
+    #[test]
+    fn forex_watchlist_add_remove_search() {
+        let mut wl = ForexWatchlist::default();
+        assert!(wl.has("USD/IDR"));
+        assert!(!wl.has("CHF/IDR"));
+        assert!(wl.add("CHF/IDR"));
+        assert!(wl.has("CHF/IDR"));
+        wl.remove("CHF/IDR");
+        assert!(!wl.has("CHF/IDR"));
+
+        let hits = search_forex("GOLD", &[]);
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].0, "GOLD");
     }
 }

@@ -5,12 +5,16 @@
 use crate::gfx::{TextStyle, Weight};
 use crate::icons::Icon;
 use crate::state::AppState;
-use crate::ui::{wid, wid_n, Ui};
+use crate::ui::{wid, wid_n, KeyInput, PillStyle, Ui, PILL_SMALL};
 use poni_core::geom::{palette, Color, Point, Rect};
 use poni_core::stocks::{self, Range};
 use poni_core::svgpath::Seg;
 
 const HEIGHT: f32 = 256.0;
+const ADD_H: f32 = 46.0;
+const EDIT_W: f32 = 26.0;
+const FIELD_H: f32 = 34.0;
+const RESULT_H: f32 = 36.0;
 const LIST_MIN: f32 = 232.0;
 const LIST_MAX: f32 = 300.0;
 const COL_GAP: f32 = 20.0;
@@ -50,9 +54,19 @@ pub struct ForexUi {
     pub list_drag: Option<(f32, f32, bool)>,
     pub bar_drag: Option<(f32, f32)>,
     pub pick_y: Option<f32>,
-    pub show_pct: bool,
     pub chart: Morph,
     pub last_frame: f64,
+    pub adding: bool,
+    pub query: String,
+    hit: usize,
+    focus: bool,
+    pub editing: bool,
+    edit_k: f32,
+    swap_k: f32,
+    srch_scroll: f32,
+    srch_shown_scroll: f32,
+    srch_list_drag: Option<(f32, f32, bool)>,
+    srch_bar_drag: Option<(f32, f32)>,
 }
 
 pub fn height(_st: &AppState) -> f32 {
@@ -74,7 +88,18 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     let detail_r = Rect::new(detail_x, area.y, (area.right() - detail_x).max(0.0), area.h);
 
     let mut moving = false;
-    forex_list(ui, st, list_r, area, dt, &mut moving);
+    let s = &mut st.ui.forex;
+    s.swap_k = glide(s.swap_k, 1.0, dt, 0.01, &mut moving);
+    s.edit_k = glide(s.edit_k, if s.editing { 1.0 } else { 0.0 }, dt, 0.01, &mut moving);
+
+    let base = ui.c.alpha();
+    ui.c.set_alpha(base * ease_out(st.ui.forex.swap_k));
+    if st.ui.forex.adding {
+        forex_search(ui, st, list_r, area, dt, &mut moving);
+    } else {
+        forex_list(ui, st, list_r, area, dt, &mut moving);
+    }
+    ui.c.set_alpha(base);
     forex_detail(ui, st, detail_r);
 
     if moving {
@@ -201,14 +226,30 @@ fn mini_forex_chart(ui: &mut Ui, q: &poni_core::forex::ForexQuote, r: Rect) {
 
 fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
     let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
-    let quotes = &board.quotes;
+    let quotes: Vec<poni_core::forex::ForexQuote> = st.store.forex.symbols.iter().map(|sym| {
+        board.quote(sym).cloned().unwrap_or_else(|| {
+            let name = poni_core::forex::KNOWN_FOREX_ITEMS.iter().find(|(s, _)| s.eq_ignore_ascii_case(sym)).map(|(_, n)| *n).unwrap_or(sym);
+            poni_core::forex::ForexQuote {
+                symbol: sym.clone(),
+                name: name.to_string(),
+                rate: 0.0,
+                open: 0.0,
+                prev_close: 0.0,
+                low: 0.0,
+                high: 0.0,
+                change_pct: 0.0,
+                is_gold: sym == "GOLD",
+                unit: String::new(),
+                spark: Vec::new(),
+            }
+        })
+    }).collect();
     let n = quotes.len();
-    let footer_h = 26.0;
-    let content_h = n as f32 * ROW_H + footer_h;
+    let content_h = n as f32 * ROW_H + ADD_H;
     let max_scroll = (content_h - r.h).max(0.0);
     let card = crate::pages::card::pill_card(st, r);
 
-    let pick_raw = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+    let pick_raw = st.store.forex.pick.clone();
     let pick = poni_core::forex::normalize_symbol(&pick_raw);
     let s = &mut st.ui.forex;
 
@@ -270,16 +311,22 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
         None => pick_target,
     };
     s.pick_y = Some(pick_y);
-    let show_pct = !s.show_pct;
+    let show_pct = st.store.forex.show_pct;
 
     ui.c.clip(Rect::new(r.x - 8.0, r.y, r.w + 16.0, r.h));
 
-    let hl = Rect::new(r.x, top + pick_y + 2.0, r.w, ROW_H - 4.0);
-    crate::pages::card::fill_box(ui, card, hl, 10.0, Color::white(0.10));
+    let editing = s.editing || s.edit_k > 0.01;
+    if !editing {
+        let hl = Rect::new(r.x, top + pick_y + 2.0, r.w, ROW_H - 4.0);
+        crate::pages::card::fill_box(ui, card, hl, 10.0, Color::white(0.10));
+    }
 
     let mut clicked_sym = None;
     let mut clicked_y = None;
     let mut toggle_mode = false;
+    let mut removed = None;
+
+    let shift = EDIT_W * ease_out(s.edit_k);
 
     for (i, q) in quotes.iter().enumerate() {
         let y = i as f32 * ROW_H;
@@ -289,7 +336,7 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
         };
         let is_picked = q.symbol.eq_ignore_ascii_case(&pick);
         let resp = ui.button(wid_n("forex.item", code_n(&q.symbol)), hit_clip);
-        if (resp.hovered || resp.pressed) && !is_picked {
+        if (resp.hovered || resp.pressed) && !is_picked && !editing {
             crate::pages::card::fill_box(
                 ui,
                 card,
@@ -298,12 +345,12 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
                 Color::white(if resp.pressed { 0.08 } else { 0.05 }),
             );
         }
-        if resp.clicked {
+        if resp.clicked && !editing {
             clicked_sym = Some(q.symbol.clone());
             clicked_y = Some(y);
         }
 
-        let x0 = row.x + ROW_PAD;
+        let x0 = row.x + ROW_PAD + shift;
         let right = row.right() - ROW_PAD;
         let pill = Rect::new(right - PILL_W, row.y + 25.0, PILL_W, PILL_H);
         let spark = Rect::new(pill.x - 8.0 - SPARK_W, row.y + 11.0, SPARK_W, 26.0);
@@ -312,33 +359,84 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
         ui.c.text(&q.symbol, Rect::new(x0, row.y + 6.0, text_w, 19.0), &TextStyle::headline().weight(Weight::Semibold));
         ui.c.text(&q.name, Rect::new(x0, row.y + 25.0, text_w, 17.0), &TextStyle::footnote().color(palette::TEXT_DIM));
 
-        mini_forex_chart(ui, q, spark);
+        let base = ui.c.alpha();
+        let k = 1.0 - s.edit_k;
+        if k > 0.01 {
+            ui.c.set_alpha(base * k);
+            mini_forex_chart(ui, q, spark);
 
-        let price_str = q.formatted_rate();
-        ui.c.text(&price_str, Rect::new(right - 124.0, row.y + 5.0, 124.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
+            let price_str = q.formatted_rate();
+            ui.c.text(&price_str, Rect::new(right - 124.0, row.y + 5.0, 124.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
 
-        let mut fill = match q.trend() {
-            1 => palette::GREEN,
-            -1 => palette::RED,
-            _ => Color::white(0.36),
-        };
-        if let Some(pill_clip) = intersect(pill, r) {
-            let pr = ui.button(wid_n("forex.pill", code_n(&q.symbol)), pill_clip);
-            if pr.pressed {
-                fill = fill.mul_alpha(0.75);
+            let mut fill = match q.trend() {
+                1 => palette::GREEN,
+                -1 => palette::RED,
+                _ => Color::white(0.36),
+            };
+            if let Some(pill_clip) = intersect(pill, r) {
+                let pr = ui.button(wid_n("forex.pill", code_n(&q.symbol)), pill_clip);
+                if pr.pressed {
+                    fill = fill.mul_alpha(0.75);
+                }
+                if pr.clicked && !editing {
+                    toggle_mode = true;
+                }
             }
-            if pr.clicked {
-                toggle_mode = true;
-            }
+            ui.c.fill_rrect(pill, 6.0, fill);
+            let chg_str = q.formatted_change(show_pct);
+            ui.c.text(&chg_str, Rect::new(pill.x + 5.0, pill.y, pill.w - 10.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
+            ui.c.set_alpha(base);
         }
-        ui.c.fill_rrect(pill, 6.0, fill);
-        let chg_str = q.formatted_change(show_pct);
-        ui.c.text(&chg_str, Rect::new(pill.x + 5.0, pill.y, pill.w - 10.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
+
+        if editing {
+            ui.c.set_alpha(base * s.edit_k);
+            let c = Point::new(row.x + ROW_PAD + 9.0, row.center().y);
+            let rm = intersect(Rect::from_center(c, 26.0, 26.0), r).map(|rh| ui.button(wid_n("forex.del", code_n(&q.symbol)), rh)).unwrap_or_default();
+            ui.c.fill_circle(c, 9.0, if rm.pressed { palette::RED.mul_alpha(0.7) } else { palette::RED });
+            ui.c.fill_rrect(Rect::from_center(c, 9.0, 2.0), 1.0, Color::white(1.0));
+            if rm.clicked {
+                removed = Some(q.symbol.clone());
+            }
+            ui.c.set_alpha(base);
+        }
     }
 
-    let foot_r = Rect::new(r.x + ROW_PAD, top + n as f32 * ROW_H + 6.0, r.w - 2.0 * ROW_PAD, 16.0);
-    if intersect(foot_r, r).is_some() {
-        ui.c.text("Live spot & foreign exchange rates", foot_r, &TextStyle::caption().color(palette::TEXT_FAINT));
+    let add = Rect::new(r.x, top + n as f32 * ROW_H, r.w, ADD_H);
+    let line = Rect::new(add.x + ROW_PAD, add.y + 4.0, add.w - 2.0 * ROW_PAD, 22.0);
+    let edit_label = if s.editing { "Done" } else { "Edit" };
+    let edit_st = TextStyle::body().weight(Weight::Semibold).right();
+    let ew = ui.c.measure(edit_label, &edit_st, 100.0).0.ceil();
+    let edit_r = Rect::new(line.right() - ew - 8.0, line.y - 3.0, ew + 16.0, line.h + 6.0);
+    let mut start_add = false;
+    if intersect(add, r).is_some() {
+        if st.store.forex.full() {
+            ui.c.text("Your list is full: 20 instruments", line, &TextStyle::footnote().color(palette::TEXT_FAINT));
+        } else if !s.editing {
+            let add_r = Rect::new(add.x, line.y - 3.0, (edit_r.x - add.x - 8.0).max(0.0), line.h + 6.0);
+            if let Some(add_hit) = intersect(add_r, r) {
+                let resp = ui.button(wid("forex.add"), add_hit);
+                if resp.hovered || resp.pressed {
+                    crate::pages::card::fill_box(ui, card, add_r, 9.0, Color::white(if resp.pressed { 0.10 } else { 0.06 }));
+                }
+                start_add = resp.clicked;
+            }
+            let cy = line.center().y;
+            ui.c.fill_circle(Point::new(line.x + 9.0, cy), 9.0, st.accent.with_alpha(0.20));
+            ui.c.icon(Icon::Plus, Rect::from_center(Point::new(line.x + 9.0, cy), 13.0, 13.0), st.accent);
+            ui.c.text("Add instrument", Rect::new(line.x + 26.0, line.y, line.w - 26.0 - ew - 20.0, line.h), &TextStyle::body().weight(Weight::Semibold).color(st.accent));
+        }
+        if !st.store.forex.symbols.is_empty() || s.editing {
+            if let Some(edit_hit) = intersect(edit_r, r) {
+                let resp = ui.button(wid("forex.edit"), edit_hit);
+                let c = if resp.hovered { palette::TEXT } else { palette::TEXT_DIM };
+                ui.c.text(edit_label, Rect::new(edit_r.x, line.y, edit_r.w - 8.0, line.h), &edit_st.color(c));
+                if resp.clicked {
+                    s.editing = !s.editing;
+                }
+            }
+        }
+        let credit = "Live spot & foreign exchange rates";
+        ui.c.text(credit, Rect::new(line.x, add.y + 28.0, line.w, 14.0), &TextStyle::caption().color(palette::TEXT_FAINT));
     }
 
     if s.shown_scroll > 0.5 {
@@ -357,12 +455,15 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
     }
     ui.c.unclip();
 
+    let mut save = false;
     if toggle_mode {
-        st.ui.forex.show_pct = !st.ui.forex.show_pct;
+        st.store.forex.show_pct = !st.store.forex.show_pct;
+        save = true;
     } else if let Some(sym) = clicked_sym {
+        st.store.forex.pick = sym.clone();
         st.ui.forex_pick = Some(sym);
+        save = true;
         if let Some(py) = clicked_y {
-            let s = &mut st.ui.forex;
             if py < s.scroll {
                 s.scroll = py.clamp(0.0, max_scroll);
                 *moving = true;
@@ -372,6 +473,217 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
             }
         }
     }
+    if let Some(sym) = removed {
+        st.store.forex.remove(&sym);
+        if st.store.forex.symbols.is_empty() {
+            s.editing = false;
+        }
+        save = true;
+    }
+    if start_add {
+        s.adding = true;
+        s.focus = true;
+        s.query.clear();
+        s.hit = 0;
+        s.swap_k = 0.0;
+    }
+    if save {
+        st.save();
+    }
+}
+
+fn forex_search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
+    let accent = st.accent;
+    let id = wid("forex.query");
+    let cancel_w = ui.pill_width("Cancel", false, true);
+    let cancel = Rect::new(r.right() - cancel_w, r.y + (FIELD_H - PILL_SMALL) / 2.0, cancel_w, PILL_SMALL);
+    let field = Rect::new(r.x, r.y, (cancel.x - 8.0 - r.x).max(0.0), FIELD_H);
+    let card = crate::pages::card::pill_card(st, r);
+
+    let s = &mut st.ui.forex;
+    if std::mem::take(&mut s.focus) {
+        ui.focus_text(id, s.query.chars().count());
+    }
+    let mut moves = 0i32;
+    if ui.input.focused == Some(id) {
+        ui.input.keys.retain(|k| match k {
+            KeyInput::Up => {
+                moves -= 1;
+                false
+            }
+            KeyInput::Down => {
+                moves += 1;
+                false
+            }
+            _ => true,
+        });
+    }
+    let resp = ui.text_input_row(id, field, &mut s.query, "Currency or commodity, like EUR or Gold", 32, accent, Some(Icon::Search));
+    if resp.changed {
+        s.hit = 0;
+        s.srch_scroll = 0.0;
+        s.srch_shown_scroll = 0.0;
+    }
+    let matches = poni_core::forex::search_forex(&s.query, &st.store.forex.symbols);
+    if !matches.is_empty() {
+        s.hit = (s.hit as i32 + moves).clamp(0, matches.len() as i32 - 1) as usize;
+    }
+
+    let query_clean = s.query.trim().to_ascii_uppercase();
+    let typed_symbol = if !query_clean.is_empty() && !st.store.forex.has(&query_clean) {
+        Some(query_clean.clone())
+    } else {
+        None
+    };
+
+    let mut chosen = None;
+    if resp.submitted {
+        chosen = matches.get(s.hit).map(|(c, _)| c.to_string()).or(typed_symbol.clone());
+    }
+    let cancelled = ui.pill(wid("forex.cancel"), cancel, "Cancel", None, PillStyle::Utility).clicked || resp.cancelled;
+
+    let top = r.y + FIELD_H + 8.0;
+    let list_r = Rect::new(r.x, top, r.w, (r.bottom() - top).max(0.0));
+    let content_h = matches.len() as f32 * RESULT_H;
+    let max_scroll = (content_h - list_r.h).max(0.0);
+
+    if moves != 0 && !matches.is_empty() {
+        let hit_y = s.hit as f32 * RESULT_H;
+        if hit_y < s.srch_scroll {
+            s.srch_scroll = hit_y.clamp(0.0, max_scroll);
+            *moving = true;
+        } else if hit_y + RESULT_H > s.srch_scroll + list_r.h {
+            s.srch_scroll = (hit_y + RESULT_H - list_r.h).clamp(0.0, max_scroll);
+            *moving = true;
+        }
+    }
+
+    let notches = ui.wheel_in(area);
+    if notches != 0.0 {
+        *moving = true;
+    }
+    s.srch_scroll = (s.srch_scroll - notches * RESULT_H * 1.5).clamp(0.0, max_scroll);
+
+    let bar_hit = Rect::new(list_r.right() - 8.0, list_r.y, 8.0, list_r.h);
+    if max_scroll > 0.0 {
+        if ui.input.just_pressed {
+            if let Some(m) = ui.input.mouse {
+                if bar_hit.contains(m) {
+                    let track_h = (list_r.h - 8.0).max(1.0);
+                    let frac = ((m.y - (list_r.y + 4.0)) / track_h).clamp(0.0, 1.0);
+                    s.srch_scroll = (frac * max_scroll).clamp(0.0, max_scroll);
+                    s.srch_shown_scroll = s.srch_scroll;
+                    s.srch_bar_drag = Some((m.y, s.srch_scroll));
+                } else if list_r.contains(m) {
+                    s.srch_list_drag = Some((m.y, s.srch_scroll, false));
+                }
+            }
+        }
+        if ui.input.down {
+            if let (Some((y0, sc0)), Some(m)) = (s.srch_bar_drag, ui.input.mouse) {
+                let track_h = (list_r.h - 8.0).max(1.0);
+                let thumb_h = (track_h * (list_r.h / content_h)).clamp(24.0, track_h);
+                let travel = (track_h - thumb_h).max(1.0);
+                s.srch_scroll = (sc0 + (m.y - y0) / travel * max_scroll).clamp(0.0, max_scroll);
+                s.srch_shown_scroll = s.srch_scroll;
+                ui.input.pressed_id = None;
+            } else if let (Some((y0, sc0, moved)), Some(m)) = (&mut s.srch_list_drag, ui.input.mouse) {
+                let dy = m.y - *y0;
+                if *moved || dy.abs() > 6.0 {
+                    *moved = true;
+                    s.srch_scroll = (*sc0 - dy).clamp(0.0, max_scroll);
+                    s.srch_shown_scroll = s.srch_scroll;
+                    ui.input.pressed_id = None;
+                    ui.input.clicked = None;
+                }
+            }
+        } else {
+            s.srch_bar_drag = None;
+            s.srch_list_drag = None;
+        }
+    } else {
+        s.srch_bar_drag = None;
+        s.srch_list_drag = None;
+    }
+
+    s.srch_shown_scroll = glide(s.srch_shown_scroll.clamp(0.0, max_scroll), s.srch_scroll, dt, 0.25, moving);
+
+    if matches.is_empty() {
+        let hint_r = Rect::new(r.x + 4.0, top + 2.0, r.w - 8.0, 44.0);
+        let hint = TextStyle::footnote().color(palette::TEXT_DIM).wrap().top();
+        let msg = match &typed_symbol {
+            Some(c) if st.store.forex.has(c) => format!("{c} is on your list already."),
+            Some(c) => format!("Press Enter to add '{c}'."),
+            None => {
+                if st.store.forex.full() {
+                    "Your list is full: remove an instrument first.".to_string()
+                } else if s.query.trim().is_empty() {
+                    "Type a currency or commodity name.".to_string()
+                } else {
+                    "No matching currency or commodity found.".to_string()
+                }
+            }
+        };
+        ui.c.text(&msg, hint_r, &hint);
+    } else {
+        ui.c.clip(Rect::new(list_r.x - 8.0, list_r.y, list_r.w + 16.0, list_r.h));
+        let y_base = list_r.y - s.srch_shown_scroll;
+        for (i, &(code, name)) in matches.iter().enumerate() {
+            let row = Rect::new(r.x, y_base + i as f32 * RESULT_H, r.w, RESULT_H);
+            let Some(row_hit) = intersect(row, list_r) else {
+                continue;
+            };
+            let b = ui.button(wid_n("forex.srch_hit", code_n(code)), row_hit);
+            if b.clicked {
+                chosen = Some(code.to_string());
+            }
+            let lit = i == s.hit || b.hovered;
+            if lit {
+                crate::pages::card::fill_box(ui, card, row.inset(0.0, 1.0), 9.0, Color::white(if b.pressed { 0.12 } else if i == s.hit { 0.09 } else { 0.06 }));
+            }
+            let tx = row.x + ROW_PAD;
+            let code_st = TextStyle::body().weight(Weight::Semibold);
+            let cw = ui.c.measure(code, &code_st, 100.0).0.ceil().max(48.0);
+            ui.c.text(code, Rect::new(tx, row.y, cw + 2.0, row.h), &code_st);
+            ui.c.text(name, Rect::new(tx + cw + 12.0, row.y, row.right() - tx - cw - 20.0, row.h), &TextStyle::footnote().color(palette::TEXT_DIM));
+        }
+
+        if s.srch_shown_scroll > 0.5 {
+            fade(ui, Rect::new(list_r.x - 8.0, list_r.y, list_r.w + 16.0, 12.0), true);
+        }
+        if s.srch_shown_scroll < max_scroll - 0.5 {
+            fade(ui, Rect::new(list_r.x - 8.0, list_r.bottom() - 14.0, list_r.w + 16.0, 14.0), false);
+        }
+        if max_scroll > 0.5 && (ui.hovered(list_r) || s.srch_bar_drag.is_some()) {
+            let track_h = (list_r.h - 8.0).max(1.0);
+            let thumb_h = (track_h * (list_r.h / content_h)).clamp(24.0, track_h);
+            let thumb_y = list_r.y + 4.0 + (s.srch_shown_scroll / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
+            let active = ui.hovered(bar_hit) || s.srch_bar_drag.is_some();
+            let w = if active { 4.0 } else { 2.5 };
+            ui.c.fill_rrect(Rect::new(list_r.right() - w - 1.0, thumb_y, w, thumb_h), w / 2.0, Color::white(if active { 0.42 } else { 0.22 }));
+        }
+        ui.c.unclip();
+    }
+
+    if let Some(symbol) = chosen {
+        if st.store.forex.add(&symbol) {
+            st.store.forex.pick = symbol.clone();
+            st.ui.forex_pick = Some(symbol);
+            st.ui.forex.scroll = f32::MAX;
+            st.save();
+        }
+        close_forex_search(ui, &mut st.ui.forex);
+    } else if cancelled {
+        close_forex_search(ui, &mut st.ui.forex);
+    }
+}
+
+fn close_forex_search(ui: &mut Ui, s: &mut ForexUi) {
+    s.adding = false;
+    s.query.clear();
+    s.hit = 0;
+    s.swap_k = 0.0;
+    ui.blur();
 }
 
 struct Line {
@@ -492,9 +804,9 @@ fn forex_chart_line(st: &AppState, q: &poni_core::forex::ForexQuote, range: Rang
     line
 }
 fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
-    let pick_raw = st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+    let pick_raw = st.store.forex.pick.clone();
     let pick = poni_core::forex::normalize_symbol(&pick_raw);
-    let range = st.store.stocks.range;
+    let range = st.store.forex.range;
 
     let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
     let Some(q) = board.quote(&pick).cloned() else { return };
@@ -566,7 +878,7 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
 
     // Range selector using identical style
     if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
-        st.store.stocks.range = pick_range;
+        st.store.forex.range = pick_range;
         st.save();
     }
 

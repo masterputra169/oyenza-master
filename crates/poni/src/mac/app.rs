@@ -3029,7 +3029,8 @@ impl App {
         } else {
             None
         };
-        let w = services::forex::Watch { open, chart };
+        let symbols = self.st.store.forex.symbols.clone();
+        let w = services::forex::Watch { open, chart, symbols };
         if self.forex.is_none() && w.open {
             match services::forex::ForexService::start(self.sink.clone()) {
                 Ok(s) => self.forex = Some(s),

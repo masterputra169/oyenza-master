@@ -122,7 +122,17 @@ pub struct StocksUi {
     us_list_drag: Option<(f32, f32, bool)>,
     us_bar_drag: Option<(f32, f32)>,
     us_pick_y: Option<f32>,
-    us_show_pct: bool,
+    pub us_adding: bool,
+    pub us_query: String,
+    us_hit: usize,
+    us_focus: bool,
+    pub us_editing: bool,
+    us_edit_k: f32,
+    us_swap_k: f32,
+    us_srch_scroll: f32,
+    us_srch_shown_scroll: f32,
+    us_srch_list_drag: Option<(f32, f32, bool)>,
+    us_srch_bar_drag: Option<(f32, f32)>,
     /// Each row's shown top in the list, gliding to its place.
     rows: Vec<(String, f32)>,
     /// The picked row's highlight, gliding from row to row.
@@ -144,6 +154,8 @@ impl StocksUi {
         self.drawn = now;
         self.swap_k = 1.0;
         self.edit_k = if self.editing { 1.0 } else { 0.0 };
+        self.us_swap_k = 1.0;
+        self.us_edit_k = if self.us_editing { 1.0 } else { 0.0 };
         self.us_chart = Morph::default();
     }
 }
@@ -221,6 +233,8 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     s.drawn = now;
     let mut moving = false;
     s.swap_k = glide(s.swap_k, 1.0, dt, 0.01, &mut moving);
+    s.us_swap_k = glide(s.us_swap_k, 1.0, dt, 0.01, &mut moving);
+    s.us_edit_k = glide(s.us_edit_k, if s.us_editing { 1.0 } else { 0.0 }, dt, 0.01, &mut moving);
     let list_w = (area.w * 0.44).clamp(LIST_MIN, LIST_MAX).round();
     let left = Rect::new(area.x, area.y, list_w, area.h.min(HEIGHT));
     let right = Rect::new(left.right() + COL_GAP, area.y, (area.w - list_w - COL_GAP).max(0.0), left.h);
@@ -241,8 +255,9 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     }
     let idx_c = if !is_us { Color::white(1.0) } else if idx_btn.hovered { Color::white(0.90) } else { palette::TEXT_DIM };
     ui.c.text("IDX Stocks", cols[0], &TextStyle::footnote().weight(Weight::Semibold).center().color(idx_c));
-    if idx_btn.clicked {
+    if idx_btn.clicked && is_us {
         st.ui.stocks_market = crate::state::StocksMarket::Idx;
+        s.swap_k = 0.0;
     }
 
     let us_btn = ui.button(wid("stocks.tab_us"), cols[1]);
@@ -253,19 +268,25 @@ pub fn draw(ui: &mut Ui, st: &mut AppState, area: Rect) {
     }
     let us_c = if is_us { Color::white(1.0) } else if us_btn.hovered { Color::white(0.90) } else { palette::TEXT_DIM };
     ui.c.text("US Stocks", cols[1], &TextStyle::footnote().weight(Weight::Semibold).center().color(us_c));
-    if us_btn.clicked {
+    if us_btn.clicked && !is_us {
         st.ui.stocks_market = crate::state::StocksMarket::Us;
+        s.us_swap_k = 0.0;
     }
 
     let left_content = Rect::new(left.x, left.y + switcher_h + 6.0, left.w, (left.h - switcher_h - 6.0).max(10.0));
 
     let base = ui.c.alpha();
-    ui.c.set_alpha(base * ease_out(st.ui.stocks.swap_k));
     if is_us {
-        us_stocks_list(ui, st, left_content, area, dt, &mut moving);
+        ui.c.set_alpha(base * ease_out(st.ui.stocks.us_swap_k));
+        if st.ui.stocks.us_adding {
+            us_stocks_search(ui, st, left_content, area, dt, &mut moving);
+        } else {
+            us_stocks_list(ui, st, left_content, area, dt, &mut moving);
+        }
         ui.c.set_alpha(base);
         us_stocks_detail(ui, st, right);
     } else {
+        ui.c.set_alpha(base * ease_out(st.ui.stocks.swap_k));
         if st.ui.stocks.adding {
             search(ui, st, left_content);
         } else {
@@ -1255,14 +1276,26 @@ fn mini_us_chart(ui: &mut Ui, q: &poni_core::us_stocks::UsStockQuote, r: Rect) {
 
 fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
     let board = st.us_stocks.board.clone().unwrap_or_else(poni_core::us_stocks::UsStockBoard::default_board);
-    let quotes = &board.quotes;
+    let quotes: Vec<poni_core::us_stocks::UsStockQuote> = st.store.us_stocks.codes.iter().map(|code| {
+        board.find(code).cloned().unwrap_or_else(|| poni_core::us_stocks::UsStockQuote {
+            symbol: code.clone(),
+            name: poni_core::us_stocks::KNOWN_US_STOCKS.iter().find(|(c, _)| c.eq_ignore_ascii_case(code)).map(|(_, n)| n.to_string()).unwrap_or_else(|| code.clone()),
+            price: 0.0,
+            prev: 0.0,
+            open: None,
+            high: None,
+            low: None,
+            volume: None,
+            w52: None,
+            spark: Vec::new(),
+        })
+    }).collect();
     let n = quotes.len();
-    let footer_h = 26.0;
-    let content_h = n as f32 * ROW_H + footer_h;
+    let content_h = n as f32 * ROW_H + ADD_H;
     let max_scroll = (content_h - r.h).max(0.0);
     let card = super::card::pill_card(st, r);
 
-    let pick = st.us_stocks.pick.clone();
+    let pick = st.store.us_stocks.pick.clone();
     let s = &mut st.ui.stocks;
 
     let notches = ui.wheel_in(area);
@@ -1323,16 +1356,22 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
         None => pick_target,
     };
     s.us_pick_y = Some(pick_y);
-    let show_pct = !s.us_show_pct;
+    let show_pct = st.store.us_stocks.show_pct;
 
     ui.c.clip(Rect::new(r.x - 8.0, r.y, r.w + 16.0, r.h));
 
-    let hl = Rect::new(r.x, top + pick_y + 2.0, r.w, ROW_H - 4.0);
-    super::card::fill_box(ui, card, hl, 10.0, Color::white(0.10));
+    let editing = s.us_editing || s.us_edit_k > 0.01;
+    if !editing {
+        let hl = Rect::new(r.x, top + pick_y + 2.0, r.w, ROW_H - 4.0);
+        super::card::fill_box(ui, card, hl, 10.0, Color::white(0.10));
+    }
 
     let mut clicked_sym = None;
     let mut clicked_y = None;
     let mut toggle_mode = false;
+    let mut removed = None;
+
+    let shift = EDIT_W * ease_out(s.us_edit_k);
 
     for (i, q) in quotes.iter().enumerate() {
         let y = i as f32 * ROW_H;
@@ -1342,7 +1381,7 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
         };
         let is_picked = q.symbol.eq_ignore_ascii_case(&pick);
         let resp = ui.button(wid_n("usstocks.item", code_n(&q.symbol)), hit_clip);
-        if (resp.hovered || resp.pressed) && !is_picked {
+        if (resp.hovered || resp.pressed) && !is_picked && !editing {
             super::card::fill_box(
                 ui,
                 card,
@@ -1351,12 +1390,12 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
                 Color::white(if resp.pressed { 0.08 } else { 0.05 }),
             );
         }
-        if resp.clicked {
+        if resp.clicked && !editing {
             clicked_sym = Some(q.symbol.clone());
             clicked_y = Some(y);
         }
 
-        let x0 = row.x + ROW_PAD;
+        let x0 = row.x + ROW_PAD + shift;
         let right = row.right() - ROW_PAD;
         let pill = Rect::new(right - PILL_W, row.y + 25.0, PILL_W, PILL_H);
         let spark = Rect::new(pill.x - 8.0 - SPARK_W, row.y + 11.0, SPARK_W, 26.0);
@@ -1365,38 +1404,89 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
         ui.c.text(&q.symbol, Rect::new(x0, row.y + 6.0, text_w, 19.0), &TextStyle::headline().weight(Weight::Semibold));
         ui.c.text(&q.name, Rect::new(x0, row.y + 25.0, text_w, 17.0), &TextStyle::footnote().color(palette::TEXT_DIM));
 
-        mini_us_chart(ui, q, spark);
+        let base = ui.c.alpha();
+        let k = 1.0 - s.us_edit_k;
+        if k > 0.01 {
+            ui.c.set_alpha(base * k);
+            mini_us_chart(ui, q, spark);
 
-        let price_str = q.fmt_price();
-        ui.c.text(&price_str, Rect::new(right - 124.0, row.y + 5.0, 124.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
+            let price_str = q.fmt_price();
+            ui.c.text(&price_str, Rect::new(right - 124.0, row.y + 5.0, 124.0, 19.0), &TextStyle::body().weight(Weight::Semibold).tabular().right());
 
-        let mut fill = match q.trend() {
-            Trend::Up => palette::GREEN,
-            Trend::Down => palette::RED,
-            Trend::Flat => Color::white(0.36),
-        };
-        if let Some(pill_clip) = intersect(pill, r) {
-            let pr = ui.button(wid_n("usstocks.pill", code_n(&q.symbol)), pill_clip);
-            if pr.pressed {
-                fill = fill.mul_alpha(0.75);
+            let mut fill = match q.trend() {
+                Trend::Up => palette::GREEN,
+                Trend::Down => palette::RED,
+                Trend::Flat => Color::white(0.36),
+            };
+            if let Some(pill_clip) = intersect(pill, r) {
+                let pr = ui.button(wid_n("usstocks.pill", code_n(&q.symbol)), pill_clip);
+                if pr.pressed {
+                    fill = fill.mul_alpha(0.75);
+                }
+                if pr.clicked && !editing {
+                    toggle_mode = true;
+                }
             }
-            if pr.clicked {
-                toggle_mode = true;
-            }
+            ui.c.fill_rrect(pill, 6.0, fill);
+            let chg_str = if show_pct {
+                q.fmt_pct()
+            } else {
+                let d = q.diff();
+                if d >= 0.0 { format!("+${:.2}", d) } else { format!("-${:.2}", -d) }
+            };
+            ui.c.text(&chg_str, Rect::new(pill.x + 5.0, pill.y, pill.w - 10.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
+            ui.c.set_alpha(base);
         }
-        ui.c.fill_rrect(pill, 6.0, fill);
-        let chg_str = if show_pct {
-            q.fmt_pct()
-        } else {
-            let d = q.diff();
-            if d >= 0.0 { format!("+${:.2}", d) } else { format!("-${:.2}", -d) }
-        };
-        ui.c.text(&chg_str, Rect::new(pill.x + 5.0, pill.y, pill.w - 10.0, pill.h), &TextStyle::footnote().weight(Weight::Semibold).tabular().right().color(Color::white(1.0)));
+
+        if editing {
+            ui.c.set_alpha(base * s.us_edit_k);
+            let c = Point::new(row.x + ROW_PAD + 9.0, row.center().y);
+            let rm = intersect(Rect::from_center(c, 26.0, 26.0), r).map(|rh| ui.button(wid_n("usstocks.del", code_n(&q.symbol)), rh)).unwrap_or_default();
+            ui.c.fill_circle(c, 9.0, if rm.pressed { palette::RED.mul_alpha(0.7) } else { palette::RED });
+            ui.c.fill_rrect(Rect::from_center(c, 9.0, 2.0), 1.0, Color::white(1.0));
+            if rm.clicked {
+                removed = Some(q.symbol.clone());
+            }
+            ui.c.set_alpha(base);
+        }
     }
 
-    let foot_r = Rect::new(r.x + ROW_PAD, top + n as f32 * ROW_H + 6.0, r.w - 2.0 * ROW_PAD, 16.0);
-    if intersect(foot_r, r).is_some() {
-        ui.c.text("Live US Equities via Yahoo Finance", foot_r, &TextStyle::caption().color(palette::TEXT_FAINT));
+    let add = Rect::new(r.x, top + n as f32 * ROW_H, r.w, ADD_H);
+    let line = Rect::new(add.x + ROW_PAD, add.y + 4.0, add.w - 2.0 * ROW_PAD, 22.0);
+    let edit_label = if s.us_editing { "Done" } else { "Edit" };
+    let edit_st = TextStyle::body().weight(Weight::Semibold).right();
+    let ew = ui.c.measure(edit_label, &edit_st, 100.0).0.ceil();
+    let edit_r = Rect::new(line.right() - ew - 8.0, line.y - 3.0, ew + 16.0, line.h + 6.0);
+    let mut start_add = false;
+    if intersect(add, r).is_some() {
+        if st.store.us_stocks.full() {
+            ui.c.text("Your list is full: 20 stocks", line, &TextStyle::footnote().color(palette::TEXT_FAINT));
+        } else if !s.us_editing {
+            let add_r = Rect::new(add.x, line.y - 3.0, (edit_r.x - add.x - 8.0).max(0.0), line.h + 6.0);
+            if let Some(add_hit) = intersect(add_r, r) {
+                let resp = ui.button(wid("usstocks.add"), add_hit);
+                if resp.hovered || resp.pressed {
+                    super::card::fill_box(ui, card, add_r, 9.0, Color::white(if resp.pressed { 0.10 } else { 0.06 }));
+                }
+                start_add = resp.clicked;
+            }
+            let cy = line.center().y;
+            ui.c.fill_circle(Point::new(line.x + 9.0, cy), 9.0, st.accent.with_alpha(0.20));
+            ui.c.icon(Icon::Plus, Rect::from_center(Point::new(line.x + 9.0, cy), 13.0, 13.0), st.accent);
+            ui.c.text("Add a stock", Rect::new(line.x + 26.0, line.y, line.w - 26.0 - ew - 20.0, line.h), &TextStyle::body().weight(Weight::Semibold).color(st.accent));
+        }
+        if !st.store.us_stocks.codes.is_empty() || s.us_editing {
+            if let Some(edit_hit) = intersect(edit_r, r) {
+                let resp = ui.button(wid("usstocks.edit"), edit_hit);
+                let c = if resp.hovered { palette::TEXT } else { palette::TEXT_DIM };
+                ui.c.text(edit_label, Rect::new(edit_r.x, line.y, edit_r.w - 8.0, line.h), &edit_st.color(c));
+                if resp.clicked {
+                    s.us_editing = !s.us_editing;
+                }
+            }
+        }
+        let credit = "Live US Equities via Yahoo Finance";
+        ui.c.text(credit, Rect::new(line.x, add.y + 28.0, line.w, 14.0), &TextStyle::caption().color(palette::TEXT_FAINT));
     }
 
     if s.us_shown_scroll > 0.5 {
@@ -1415,12 +1505,15 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
     }
     ui.c.unclip();
 
+    let mut save = false;
     if toggle_mode {
-        st.ui.stocks.us_show_pct = !st.ui.stocks.us_show_pct;
+        st.store.us_stocks.show_pct = !st.store.us_stocks.show_pct;
+        save = true;
     } else if let Some(sym) = clicked_sym {
+        st.store.us_stocks.pick = sym.clone();
         st.us_stocks.pick = sym;
+        save = true;
         if let Some(py) = clicked_y {
-            let s = &mut st.ui.stocks;
             if py < s.us_scroll {
                 s.us_scroll = py.clamp(0.0, max_scroll);
                 *moving = true;
@@ -1430,6 +1523,217 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
             }
         }
     }
+    if let Some(sym) = removed {
+        st.store.us_stocks.remove(&sym);
+        if st.store.us_stocks.codes.is_empty() {
+            s.us_editing = false;
+        }
+        save = true;
+    }
+    if start_add {
+        s.us_adding = true;
+        s.us_focus = true;
+        s.us_query.clear();
+        s.us_hit = 0;
+        s.us_swap_k = 0.0;
+    }
+    if save {
+        st.save();
+    }
+}
+
+fn us_stocks_search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &mut bool) {
+    let accent = st.accent;
+    let id = wid("usstocks.query");
+    let cancel_w = ui.pill_width("Cancel", false, true);
+    let cancel = Rect::new(r.right() - cancel_w, r.y + (FIELD_H - PILL_SMALL) / 2.0, cancel_w, PILL_SMALL);
+    let field = Rect::new(r.x, r.y, (cancel.x - 8.0 - r.x).max(0.0), FIELD_H);
+    let card = super::card::pill_card(st, r);
+
+    let s = &mut st.ui.stocks;
+    if std::mem::take(&mut s.us_focus) {
+        ui.focus_text(id, s.us_query.chars().count());
+    }
+    let mut moves = 0i32;
+    if ui.input.focused == Some(id) {
+        ui.input.keys.retain(|k| match k {
+            KeyInput::Up => {
+                moves -= 1;
+                false
+            }
+            KeyInput::Down => {
+                moves += 1;
+                false
+            }
+            _ => true,
+        });
+    }
+    let resp = ui.text_input_row(id, field, &mut s.us_query, "Ticker or name, like AAPL or Tesla", 32, accent, Some(Icon::Search));
+    if resp.changed {
+        s.us_hit = 0;
+        s.us_srch_scroll = 0.0;
+        s.us_srch_shown_scroll = 0.0;
+    }
+    let matches = poni_core::us_stocks::search_us_stocks(&s.us_query, &st.store.us_stocks.codes);
+    if !matches.is_empty() {
+        s.us_hit = (s.us_hit as i32 + moves).clamp(0, matches.len() as i32 - 1) as usize;
+    }
+
+    let query_clean = s.us_query.trim().to_ascii_uppercase();
+    let typed_ticker = if !query_clean.is_empty() && query_clean.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.') && !st.store.us_stocks.has(&query_clean) {
+        Some(query_clean.clone())
+    } else {
+        None
+    };
+
+    let mut chosen = None;
+    if resp.submitted {
+        chosen = matches.get(s.us_hit).map(|(c, _)| c.to_string()).or(typed_ticker.clone());
+    }
+    let cancelled = ui.pill(wid("usstocks.cancel"), cancel, "Cancel", None, PillStyle::Utility).clicked || resp.cancelled;
+
+    let top = r.y + FIELD_H + 8.0;
+    let list_r = Rect::new(r.x, top, r.w, (r.bottom() - top).max(0.0));
+    let content_h = matches.len() as f32 * RESULT_H;
+    let max_scroll = (content_h - list_r.h).max(0.0);
+
+    if moves != 0 && !matches.is_empty() {
+        let hit_y = s.us_hit as f32 * RESULT_H;
+        if hit_y < s.us_srch_scroll {
+            s.us_srch_scroll = hit_y.clamp(0.0, max_scroll);
+            *moving = true;
+        } else if hit_y + RESULT_H > s.us_srch_scroll + list_r.h {
+            s.us_srch_scroll = (hit_y + RESULT_H - list_r.h).clamp(0.0, max_scroll);
+            *moving = true;
+        }
+    }
+
+    let notches = ui.wheel_in(area);
+    if notches != 0.0 {
+        *moving = true;
+    }
+    s.us_srch_scroll = (s.us_srch_scroll - notches * RESULT_H * 1.5).clamp(0.0, max_scroll);
+
+    let bar_hit = Rect::new(list_r.right() - 8.0, list_r.y, 8.0, list_r.h);
+    if max_scroll > 0.0 {
+        if ui.input.just_pressed {
+            if let Some(m) = ui.input.mouse {
+                if bar_hit.contains(m) {
+                    let track_h = (list_r.h - 8.0).max(1.0);
+                    let frac = ((m.y - (list_r.y + 4.0)) / track_h).clamp(0.0, 1.0);
+                    s.us_srch_scroll = (frac * max_scroll).clamp(0.0, max_scroll);
+                    s.us_srch_shown_scroll = s.us_srch_scroll;
+                    s.us_srch_bar_drag = Some((m.y, s.us_srch_scroll));
+                } else if list_r.contains(m) {
+                    s.us_srch_list_drag = Some((m.y, s.us_srch_scroll, false));
+                }
+            }
+        }
+        if ui.input.down {
+            if let (Some((y0, sc0)), Some(m)) = (s.us_srch_bar_drag, ui.input.mouse) {
+                let track_h = (list_r.h - 8.0).max(1.0);
+                let thumb_h = (track_h * (list_r.h / content_h)).clamp(24.0, track_h);
+                let travel = (track_h - thumb_h).max(1.0);
+                s.us_srch_scroll = (sc0 + (m.y - y0) / travel * max_scroll).clamp(0.0, max_scroll);
+                s.us_srch_shown_scroll = s.us_srch_scroll;
+                ui.input.pressed_id = None;
+            } else if let (Some((y0, sc0, moved)), Some(m)) = (&mut s.us_srch_list_drag, ui.input.mouse) {
+                let dy = m.y - *y0;
+                if *moved || dy.abs() > 6.0 {
+                    *moved = true;
+                    s.us_srch_scroll = (*sc0 - dy).clamp(0.0, max_scroll);
+                    s.us_srch_shown_scroll = s.us_srch_scroll;
+                    ui.input.pressed_id = None;
+                    ui.input.clicked = None;
+                }
+            }
+        } else {
+            s.us_srch_bar_drag = None;
+            s.us_srch_list_drag = None;
+        }
+    } else {
+        s.us_srch_bar_drag = None;
+        s.us_srch_list_drag = None;
+    }
+
+    s.us_srch_shown_scroll = glide(s.us_srch_shown_scroll.clamp(0.0, max_scroll), s.us_srch_scroll, dt, 0.25, moving);
+
+    if matches.is_empty() {
+        let hint_r = Rect::new(r.x + 4.0, top + 2.0, r.w - 8.0, 44.0);
+        let hint = TextStyle::footnote().color(palette::TEXT_DIM).wrap().top();
+        let msg = match &typed_ticker {
+            Some(c) if st.store.us_stocks.has(c) => format!("{c} is on your list already."),
+            Some(c) => format!("Press Enter to add '{c}' via Yahoo Finance."),
+            None => {
+                if st.store.us_stocks.full() {
+                    "Your list is full: remove a stock first.".to_string()
+                } else if s.us_query.trim().is_empty() {
+                    "Type a ticker or company name.".to_string()
+                } else {
+                    "No matching US stock ticker found.".to_string()
+                }
+            }
+        };
+        ui.c.text(&msg, hint_r, &hint);
+    } else {
+        ui.c.clip(Rect::new(list_r.x - 8.0, list_r.y, list_r.w + 16.0, list_r.h));
+        let y_base = list_r.y - s.us_srch_shown_scroll;
+        for (i, &(code, name)) in matches.iter().enumerate() {
+            let row = Rect::new(r.x, y_base + i as f32 * RESULT_H, r.w, RESULT_H);
+            let Some(row_hit) = intersect(row, list_r) else {
+                continue;
+            };
+            let b = ui.button(wid_n("usstocks.srch_hit", code_n(code)), row_hit);
+            if b.clicked {
+                chosen = Some(code.to_string());
+            }
+            let lit = i == s.us_hit || b.hovered;
+            if lit {
+                super::card::fill_box(ui, card, row.inset(0.0, 1.0), 9.0, Color::white(if b.pressed { 0.12 } else if i == s.us_hit { 0.09 } else { 0.06 }));
+            }
+            let tx = row.x + ROW_PAD;
+            let code_st = TextStyle::body().weight(Weight::Semibold);
+            let cw = ui.c.measure(code, &code_st, 100.0).0.ceil().max(48.0);
+            ui.c.text(code, Rect::new(tx, row.y, cw + 2.0, row.h), &code_st);
+            ui.c.text(name, Rect::new(tx + cw + 12.0, row.y, row.right() - tx - cw - 20.0, row.h), &TextStyle::footnote().color(palette::TEXT_DIM));
+        }
+
+        if s.us_srch_shown_scroll > 0.5 {
+            fade(ui, Rect::new(list_r.x - 8.0, list_r.y, list_r.w + 16.0, 12.0), true);
+        }
+        if s.us_srch_shown_scroll < max_scroll - 0.5 {
+            fade(ui, Rect::new(list_r.x - 8.0, list_r.bottom() - 14.0, list_r.w + 16.0, 14.0), false);
+        }
+        if max_scroll > 0.5 && (ui.hovered(list_r) || s.us_srch_bar_drag.is_some()) {
+            let track_h = (list_r.h - 8.0).max(1.0);
+            let thumb_h = (track_h * (list_r.h / content_h)).clamp(24.0, track_h);
+            let thumb_y = list_r.y + 4.0 + (s.us_srch_shown_scroll / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
+            let active = ui.hovered(bar_hit) || s.us_srch_bar_drag.is_some();
+            let w = if active { 4.0 } else { 2.5 };
+            ui.c.fill_rrect(Rect::new(list_r.right() - w - 1.0, thumb_y, w, thumb_h), w / 2.0, Color::white(if active { 0.42 } else { 0.22 }));
+        }
+        ui.c.unclip();
+    }
+
+    if let Some(code) = chosen {
+        if st.store.us_stocks.add(&code) {
+            st.store.us_stocks.pick = code.clone();
+            st.us_stocks.pick = code;
+            st.ui.stocks.us_scroll = f32::MAX;
+            st.save();
+        }
+        close_us_search(ui, &mut st.ui.stocks);
+    } else if cancelled {
+        close_us_search(ui, &mut st.ui.stocks);
+    }
+}
+
+fn close_us_search(ui: &mut Ui, s: &mut StocksUi) {
+    s.us_adding = false;
+    s.us_query.clear();
+    s.us_hit = 0;
+    s.us_swap_k = 0.0;
+    ui.blur();
 }
 
 fn us_chart_line(st: &AppState, q: &poni_core::us_stocks::UsStockQuote, range: Range) -> Line {
@@ -1591,6 +1895,7 @@ fn us_stocks_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
 
     // Range selector using identical style
     if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
+        st.store.us_stocks.range = pick_range;
         st.us_stocks.range = pick_range;
         st.save();
     }

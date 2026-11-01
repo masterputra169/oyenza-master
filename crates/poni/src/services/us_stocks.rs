@@ -9,7 +9,7 @@
 
 use crate::events::{AppEvent, EventSink};
 use crate::services::http::{Client, MtaGuard};
-use poni_core::us_stocks::{self, UsStockBoard, UsStockQuote, KNOWN_US_STOCKS};
+use poni_core::us_stocks::{self, UsStockBoard, UsStockQuote};
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -22,6 +22,7 @@ const REFRESH_GAP: Duration = Duration::from_secs(60); // 60 seconds while open
 pub struct Watch {
     pub open: bool,
     pub chart: Option<String>,
+    pub codes: Vec<String>,
 }
 
 pub struct UsStocksService {
@@ -99,19 +100,28 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
-        // Fetch quotes for known top US stocks
+        let codes = if !watch.codes.is_empty() {
+            watch.codes.clone()
+        } else {
+            us_stocks::STARTERS.iter().map(|&(s, _)| s.to_string()).collect()
+        };
+
+        // Fetch quotes for requested watchlist US stocks
         if let Some(ref client) = http {
             let mut quotes = Vec::new();
 
-            for &(sym, name) in &KNOWN_US_STOCKS {
-                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=5m&range=1d");
+            for sym in &codes {
+                let sym_upper = sym.to_ascii_uppercase();
+                let default_name = us_stocks::name_for(&sym_upper).to_string();
+                let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{sym_upper}?interval=5m&range=1d");
                 if let Ok(resp) = client.get(&url, TIMEOUT) {
                     if resp.status == 200 {
                         if let Ok(chart) = us_stocks::parse_yahoo_chart_json(&resp.body) {
                             if chart.price > 0.0 {
+                                let name = chart.short_name.unwrap_or(default_name);
                                 quotes.push(UsStockQuote {
-                                    symbol: sym.to_string(),
-                                    name: name.to_string(),
+                                    symbol: sym_upper,
+                                    name,
                                     price: chart.price,
                                     prev: chart.prev,
                                     high: chart.high,

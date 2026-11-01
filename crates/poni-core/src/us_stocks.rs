@@ -21,8 +21,11 @@ pub const STARTERS: [(&str, &str); 10] = [
     ("PLTR", "Palantir Technologies"),
 ];
 
+/// Maximum number of US stocks a user can hold in their watchlist.
+pub const MAX_US_STOCKS: usize = 20;
+
 /// Top US stocks known by symbol and company name.
-pub const KNOWN_US_STOCKS: [(&str, &str); 13] = [
+pub const KNOWN_US_STOCKS: [(&str, &str); 40] = [
     ("AAPL", "Apple Inc."),
     ("NVDA", "NVIDIA Corporation"),
     ("MSFT", "Microsoft Corporation"),
@@ -36,6 +39,33 @@ pub const KNOWN_US_STOCKS: [(&str, &str); 13] = [
     ("COIN", "Coinbase Global"),
     ("SPY", "SPDR S&P 500 ETF"),
     ("QQQ", "Invesco QQQ Trust"),
+    ("INTC", "Intel Corporation"),
+    ("BABA", "Alibaba Group"),
+    ("DIS", "The Walt Disney Co."),
+    ("UBER", "Uber Technologies"),
+    ("PYPL", "PayPal Holdings"),
+    ("CRM", "Salesforce Inc."),
+    ("ORCL", "Oracle Corporation"),
+    ("ADBE", "Adobe Inc."),
+    ("NKE", "NIKE Inc."),
+    ("SBUX", "Starbucks Corporation"),
+    ("JPM", "JPMorgan Chase"),
+    ("V", "Visa Inc."),
+    ("MA", "Mastercard Inc."),
+    ("BRK.B", "Berkshire Hathaway"),
+    ("AVGO", "Broadcom Inc."),
+    ("TSM", "Taiwan Semiconductor"),
+    ("SMCI", "Super Micro Computer"),
+    ("ARM", "Arm Holdings"),
+    ("RDDT", "Reddit Inc."),
+    ("DJT", "Trump Media & Tech"),
+    ("SOUN", "SoundHound AI"),
+    ("MSTR", "MicroStrategy Inc."),
+    ("MCD", "McDonald's Corp."),
+    ("KO", "The Coca-Cola Co."),
+    ("WMT", "Walmart Inc."),
+    ("COST", "Costco Wholesale"),
+    ("VOO", "Vanguard S&P 500 ETF"),
 ];
 
 pub fn name_for(sym: &str) -> &'static str {
@@ -45,6 +75,103 @@ pub fn name_for(sym: &str) -> &'static str {
         }
     }
     "US Stock"
+}
+
+/// The user's persisted US Stocks watchlist.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsStockWatchlist {
+    pub codes: Vec<String>,
+    pub pick: String,
+    #[serde(default)]
+    pub show_pct: bool,
+    #[serde(default)]
+    pub range: crate::stocks::Range,
+}
+
+impl Default for UsStockWatchlist {
+    fn default() -> Self {
+        Self {
+            codes: STARTERS.iter().map(|&(sym, _)| sym.to_string()).collect(),
+            pick: "AAPL".to_string(),
+            show_pct: true,
+            range: crate::stocks::Range::Day,
+        }
+    }
+}
+
+impl UsStockWatchlist {
+    pub fn full(&self) -> bool {
+        self.codes.len() >= MAX_US_STOCKS
+    }
+
+    pub fn has(&self, code: &str) -> bool {
+        self.codes.iter().any(|c| c.eq_ignore_ascii_case(code))
+    }
+
+    pub fn add(&mut self, code: &str) -> bool {
+        let code = code.trim().to_ascii_uppercase();
+        if self.full() || self.has(&code) || code.is_empty() {
+            return false;
+        }
+        self.codes.push(code);
+        true
+    }
+
+    pub fn remove(&mut self, code: &str) {
+        if let Some(pos) = self.codes.iter().position(|c| c.eq_ignore_ascii_case(code)) {
+            self.codes.remove(pos);
+            if self.pick.eq_ignore_ascii_case(code) {
+                self.pick = self.codes.first().cloned().unwrap_or_else(|| "AAPL".to_string());
+            }
+        }
+    }
+
+    pub fn move_to(&mut self, code: &str, target_idx: usize) {
+        if let Some(cur) = self.codes.iter().position(|c| c.eq_ignore_ascii_case(code)) {
+            let item = self.codes.remove(cur);
+            let to = target_idx.min(self.codes.len());
+            self.codes.insert(to, item);
+        }
+    }
+}
+
+/// Autocomplete and search helper over known US stocks.
+pub fn search_us_stocks(query: &str, skip: &[String]) -> Vec<(&'static str, &'static str)> {
+    let q = query.trim().to_ascii_uppercase();
+    if q.is_empty() {
+        return KNOWN_US_STOCKS
+            .iter()
+            .copied()
+            .filter(|&(c, _)| !skip.iter().any(|x| x.eq_ignore_ascii_case(c)))
+            .collect();
+    }
+    let mut ranked: Vec<(u8, usize, &'static str, &'static str)> = Vec::new();
+    for (idx, &(c, n)) in KNOWN_US_STOCKS.iter().enumerate() {
+        if skip.iter().any(|x| x.eq_ignore_ascii_case(c)) {
+            continue;
+        }
+        let nu = n.to_ascii_uppercase();
+        let rank = if c == q {
+            0
+        } else if c.starts_with(&q) {
+            1
+        } else if nu == q {
+            2
+        } else if nu.starts_with(&q) {
+            3
+        } else if nu.split_whitespace().any(|w| w.starts_with(&q)) {
+            4
+        } else if c.contains(&q) {
+            5
+        } else if nu.contains(&q) {
+            6
+        } else {
+            continue;
+        };
+        ranked.push((rank, idx, c, n));
+    }
+    ranked.sort_by_key(|&(rank, idx, _, _)| (rank, idx));
+    ranked.into_iter().map(|(_, _, c, n)| (c, n)).collect()
 }
 
 /// One US stock quote row: symbol, company name, latest price, day range and sparkline.
@@ -199,6 +326,7 @@ pub struct YahooChart {
     pub low: Option<f64>,
     pub volume: Option<f64>,
     pub w52: Option<(f64, f64)>,
+    pub short_name: Option<String>,
     /// (minute since the opening bell, close), in time order.
     pub spark: Vec<(u16, f32)>,
 }
@@ -221,6 +349,7 @@ pub fn parse_yahoo_chart_json(json_str: &str) -> Result<YahooChart, String> {
     let low = pos(meta.get("regularMarketDayLow"));
     let volume = pos(meta.get("regularMarketVolume"));
     let w52 = pos(meta.get("fiftyTwoWeekLow")).zip(pos(meta.get("fiftyTwoWeekHigh")));
+    let short_name = meta.get("shortName").or_else(|| meta.get("longName")).and_then(|s| s.as_str()).map(|s| s.to_string());
     let start = meta.get("currentTradingPeriod").and_then(|p| p.get("regular")).and_then(|r| r.get("start")).and_then(serde_json::Value::as_i64);
 
     let mut spark = Vec::new();
@@ -249,7 +378,7 @@ pub fn parse_yahoo_chart_json(json_str: &str) -> Result<YahooChart, String> {
         last.1 = price as f32;
     }
 
-    Ok(YahooChart { price, prev, open, high, low, volume, w52, spark })
+    Ok(YahooChart { price, prev, open, high, low, volume, w52, short_name, spark })
 }
 
 /// Parses Yahoo Finance daily historical closes from `/v8/finance/chart/{ticker}?interval=1d&range=1y`.
@@ -308,5 +437,20 @@ mod tests {
         assert_eq!(session_label(150), "12:00 PM");
         assert_eq!(session_label(SESSION_MIN), "4:00 PM");
         assert_eq!(day_x(195), 0.5);
+    }
+
+    #[test]
+    fn us_stock_watchlist_add_remove_search() {
+        let mut wl = UsStockWatchlist::default();
+        assert!(wl.has("AAPL"));
+        assert!(!wl.has("CRWD"));
+        assert!(wl.add("CRWD"));
+        assert!(wl.has("CRWD"));
+        wl.remove("CRWD");
+        assert!(!wl.has("CRWD"));
+
+        let hits = search_us_stocks("TES", &[]);
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].0, "TSLA");
     }
 }

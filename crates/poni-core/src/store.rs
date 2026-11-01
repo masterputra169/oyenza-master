@@ -51,6 +51,12 @@ pub struct Store {
     pub stocks: crate::stocks::Watchlist,
     /// The Crypto add-on's list: coins, selected coin, show mode and chart range.
     pub crypto: crate::crypto::CryptoWatchlist,
+    /// Persisted US Stocks watchlist.
+    #[serde(default)]
+    pub us_stocks: crate::us_stocks::UsStockWatchlist,
+    /// Persisted Forex & Commodities watchlist.
+    #[serde(default)]
+    pub forex: crate::forex::ForexWatchlist,
     /// Ticker pinned to the idle notch / island (e.g. crypto coin or IDX stock).
     #[serde(default)]
     pub ticker: Option<TickerPin>,
@@ -81,6 +87,8 @@ impl Default for Store {
             script: crate::script::Script::default(),
             stocks: crate::stocks::Watchlist::default(),
             crypto: crate::crypto::CryptoWatchlist::default(),
+            us_stocks: crate::us_stocks::UsStockWatchlist::default(),
+            forex: crate::forex::ForexWatchlist::default(),
             ticker: None,
             alerts: Vec::new(),
             weather: None,

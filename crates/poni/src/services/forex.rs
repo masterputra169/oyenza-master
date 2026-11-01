@@ -22,6 +22,7 @@ const REFRESH_GAP: Duration = Duration::from_secs(120); // 2 minutes while open
 pub struct Watch {
     pub open: bool,
     pub chart: Option<String>,
+    pub symbols: Vec<String>,
 }
 
 pub struct ForexService {
@@ -200,7 +201,11 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 }
 
                 let board = if !rates_map.is_empty() {
-                    ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
+                    if !watch.symbols.is_empty() {
+                        ForexBoard::from_rates_feeds_and_symbols(&rates_map, &feeds, &watch.symbols, now_unix)
+                    } else {
+                        ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
+                    }
                 } else {
                     ForexBoard::default_board()
                 };
