@@ -94,7 +94,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let (lock, cvar) = &*state;
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
     let mut history_cache: HashMap<String, Instant> = HashMap::new();
-    let mut latest_idr = 18133.0;
+    let mut latest_idr = 16250.0;
     let mut board_delivered = false;
 
     loop {

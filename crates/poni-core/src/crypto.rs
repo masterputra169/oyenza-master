@@ -180,11 +180,7 @@ pub fn code_of(s: &str) -> Option<String> {
 pub fn search_coins(query: &str, skip: &[String]) -> Vec<(&'static str, &'static str)> {
     let q = query.trim().to_ascii_uppercase();
     if q.is_empty() {
-        return KNOWN_COINS
-            .iter()
-            .copied()
-            .filter(|&(c, _)| !skip.iter().any(|x| x.eq_ignore_ascii_case(c)))
-            .collect();
+        return Vec::new();
     }
     let mut ranked: Vec<(u8, usize, &'static str, &'static str)> = Vec::new();
     for (idx, &(c, n)) in KNOWN_COINS.iter().enumerate() {
@@ -602,8 +598,7 @@ mod tests {
     fn search_coins_ranks_exact_and_prefix() {
         let skip = vec!["BTC".to_string()];
         let all = search_coins("", &skip);
-        assert_eq!(all.len(), KNOWN_COINS.len() - 1);
-        assert!(!all.iter().any(|&(c, _)| c == "BTC"));
+        assert!(all.is_empty());
 
         let s_hits = search_coins("S", &[]);
         assert_eq!(s_hits.first().map(|p| p.0), Some("S"));

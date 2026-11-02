@@ -997,7 +997,13 @@ fn search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: 
         let msg = match &typed_code {
             Some(c) if st.store.crypto.codes.iter().any(|x| x.eq_ignore_ascii_case(c)) => format!("{c} is on your list already."),
             Some(c) => format!("Press Enter to add {c}USDT from Binance."),
-            None => "No matching CoinMarketCap / Binance coin.".to_string(),
+            None => {
+                if s.query.trim().is_empty() {
+                    "Type a coin code or name, like BTC or HYPE.".to_string()
+                } else {
+                    "No matching CoinMarketCap / Binance coin.".to_string()
+                }
+            }
         };
         ui.c.text(&msg, hint_r, &hint);
     } else {

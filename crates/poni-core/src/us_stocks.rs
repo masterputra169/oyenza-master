@@ -139,11 +139,7 @@ impl UsStockWatchlist {
 pub fn search_us_stocks(query: &str, skip: &[String]) -> Vec<(&'static str, &'static str)> {
     let q = query.trim().to_ascii_uppercase();
     if q.is_empty() {
-        return KNOWN_US_STOCKS
-            .iter()
-            .copied()
-            .filter(|&(c, _)| !skip.iter().any(|x| x.eq_ignore_ascii_case(c)))
-            .collect();
+        return Vec::new();
     }
     let mut ranked: Vec<(u8, usize, &'static str, &'static str)> = Vec::new();
     for (idx, &(c, n)) in KNOWN_US_STOCKS.iter().enumerate() {

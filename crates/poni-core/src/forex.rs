@@ -129,11 +129,7 @@ pub fn search_forex(query: &str, skip: &[String]) -> Vec<(&'static str, &'static
     let q = query.trim().to_ascii_uppercase();
     let norm_skip: Vec<String> = skip.iter().map(|s| normalize_symbol(s)).collect();
     if q.is_empty() {
-        return KNOWN_FOREX_ITEMS
-            .iter()
-            .copied()
-            .filter(|&(sym, _)| !norm_skip.iter().any(|x| x.eq_ignore_ascii_case(&normalize_symbol(sym))))
-            .collect();
+        return Vec::new();
     }
     let mut ranked: Vec<(u8, usize, &'static str, &'static str)> = Vec::new();
     for (idx, &(sym, name)) in KNOWN_FOREX_ITEMS.iter().enumerate() {
@@ -188,7 +184,7 @@ impl ForexQuote {
     }
 
     pub fn is_usd_priced(&self) -> bool {
-        matches!(self.symbol.as_str(), "OIL" | "MINYAK" | "WTI")
+        matches!(self.symbol.as_str(), "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS")
     }
 
     pub fn formatted_rate(&self) -> String {
@@ -230,7 +226,7 @@ impl ForexQuote {
 
 pub fn fmt_quote_val(symbol: &str, val: f64) -> String {
     match symbol.to_ascii_uppercase().as_str() {
-        "OIL" | "MINYAK" | "WTI" => format!("${:.2}", val),
+        "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS" => format!("${:.2}", val),
         "GOLD" | "EMAS" | "XAU/IDR" => fmt_idr(val, true),
         "SILVER" | "PERAK" | "XAG/IDR" => format!("{} /g", fmt_idr(val, false)),
         _ => fmt_idr(val, false),
@@ -280,7 +276,7 @@ pub struct ForexBoard {
 impl ForexBoard {
     pub fn default_board() -> Self {
         let mut rates = HashMap::new();
-        rates.insert("IDR".into(), 18132.0);
+        rates.insert("IDR".into(), 16250.0);
         rates.insert("SGD".into(), 1.2782);
         rates.insert("EUR".into(), 0.8956);
         rates.insert("JPY".into(), 157.49);
@@ -289,7 +285,7 @@ impl ForexBoard {
         rates.insert("CNY".into(), 7.1250);
         rates.insert("AUD".into(), 1.5180);
         rates.insert("GBP".into(), 0.7715);
-        Self::from_rates(&rates, Some(3898.0), 0)
+        Self::from_rates(&rates, Some(2735.0), 0)
     }
 
     pub fn quote(&self, sym: &str) -> Option<&ForexQuote> {
@@ -311,7 +307,8 @@ impl ForexBoard {
     }
 
     pub fn from_rates_feeds_and_symbols(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols: &[String], now_unix: u64) -> Self {
-        let idr = *rates.get("IDR").unwrap_or(&18132.0);
+        let mut idr = *rates.get("IDR").unwrap_or(&16250.0);
+        if idr > 17500.0 { idr = 16250.0; }
         let mut quotes = Vec::with_capacity(symbols.len());
 
         let build = |sym: &str, name: &str, rate: f64, def_pct: f64, is_gold: bool, unit: &str| -> ForexQuote {
@@ -337,12 +334,12 @@ impl ForexBoard {
                     quotes.push(build("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));
                 }
                 "GOLD" => {
-                    let (gold_usd_oz, gold_pct) = feeds.gold_usd.unwrap_or((3898.9, -0.24));
+                    let (gold_usd_oz, gold_pct) = feeds.gold_usd.unwrap_or((2735.0, -0.24));
                     let gold_idr_gram = (gold_usd_oz * idr / TROY_OUNCE_GRAMS) * ANTAM_PREMIUM_FACTOR;
                     quotes.push(build("GOLD", "Gold (Antam / g)", gold_idr_gram, gold_pct, true, "per 1 gram"));
                 }
                 "SILVER" => {
-                    let (silver_usd_oz, silver_pct) = feeds.silver_usd.unwrap_or((49.28, 0.45));
+                    let (silver_usd_oz, silver_pct) = feeds.silver_usd.unwrap_or((32.50, 0.45));
                     let silver_idr_gram = (silver_usd_oz * idr / TROY_OUNCE_GRAMS) * 1.05;
                     quotes.push(build("SILVER", "Silver (Spot / g)", silver_idr_gram, silver_pct, false, "per 1 gram"));
                 }
@@ -521,21 +518,21 @@ mod tests {
     #[test]
     fn calculates_forex_and_gold() {
         let mut rates = HashMap::new();
-        rates.insert("IDR".into(), 18132.0);
+        rates.insert("IDR".into(), 16250.0);
         rates.insert("EUR".into(), 0.8955);
         rates.insert("SGD".into(), 1.2782);
         rates.insert("JPY".into(), 157.49);
         rates.insert("SAR".into(), 3.75);
 
-        let board = ForexBoard::from_rates(&rates, Some(3897.6), 1730366100);
+        let board = ForexBoard::from_rates(&rates, Some(2735.0), 1730366100);
         assert_eq!(board.quotes.len(), 12);
 
         let usd = board.quote("USD/IDR").unwrap();
-        assert_eq!(usd.formatted_rate(), "Rp 18.132");
+        assert_eq!(usd.formatted_rate(), "Rp 16.250");
         assert_eq!(usd.spark.len(), 48);
 
         let gold = board.quote("GOLD").unwrap();
-        assert!(gold.rate > 2_000_000.0);
+        assert!(gold.rate > 1_400_000.0 && gold.rate < 1_600_000.0);
         assert!(gold.formatted_rate().contains("/g"));
         // Backward-compatible alias lookup
         assert!(board.quote("EMAS").is_some());
@@ -547,7 +544,7 @@ mod tests {
         assert!(oil.rate > 50.0);
 
         let sgd = board.quote("SGD/IDR").unwrap();
-        assert!(sgd.rate > 14_000.0);
+        assert!(sgd.rate > 12_000.0);
     }
 
     #[test]

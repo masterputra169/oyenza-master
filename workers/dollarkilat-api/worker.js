@@ -378,11 +378,12 @@ async function handleForexBoard(symbols) {
       if (erData?.rates) {
         rates = erData.rates;
         if (erData.rates.IDR) usdIdr = erData.rates.IDR;
+        if (usdIdr > 17500.0) usdIdr = 16250.0;
       }
     }
   } catch (_) {}
 
-  let goldUsdPerOunce = 2750.0;
+  let goldUsdPerOunce = 2735.0;
   try {
     const paxgRes = await fetch("https://data-api.binance.vision/api/v3/ticker/price?symbol=PAXGUSDT");
     if (paxgRes.ok) {
@@ -391,8 +392,8 @@ async function handleForexBoard(symbols) {
     }
   } catch (_) {}
 
-  const goldPerGramIdr = Math.round((goldUsdPerOunce / 31.1034768) * usdIdr);
-  const silverPerGramIdr = Math.round(((goldUsdPerOunce * 0.012) / 31.1034768) * usdIdr);
+  const goldPerGramIdr = Math.round(((goldUsdPerOunce / 31.1034768) * usdIdr) * 1.03);
+  const silverPerGramIdr = Math.round(((32.50 / 31.1034768) * usdIdr) * 1.05);
 
   const quotes = symbols.map((code) => {
     let name = code;
@@ -426,12 +427,28 @@ async function handleForexBoard(symbols) {
       unit = "per 1 gram (IDR)";
     } else if (code === "OIL") {
       name = "Crude Oil (WTI)";
-      rate = 71.5;
+      rate = 74.5;
       unit = "per barrel (USD)";
     } else if (code === "BRENT") {
       name = "Brent Crude Oil";
-      rate = 75.8;
+      rate = 78.4;
       unit = "per barrel (USD)";
+    } else if (code === "COPPER") {
+      name = "Copper Spot";
+      rate = 4.38;
+      unit = "per lb (USD)";
+    } else if (code === "NATURAL_GAS") {
+      name = "Natural Gas";
+      rate = 2.85;
+      unit = "per MMBtu (USD)";
+    } else if (code === "PLATINUM") {
+      name = "Platinum Spot";
+      rate = Math.round(32.50 * usdIdr);
+      unit = "per 1 gram (IDR)";
+    } else if (code === "PALLADIUM") {
+      name = "Palladium Spot";
+      rate = Math.round(35.80 * usdIdr);
+      unit = "per 1 gram (IDR)";
     } else {
       rate = 10000;
       unit = "per unit";
@@ -455,7 +472,7 @@ async function handleForexBoard(symbols) {
 function handleForexSearch(query) {
   const q = (query || "").trim().toUpperCase();
   if (!q) {
-    return { results: FOREX_CATALOG.slice(0, 15) };
+    return { query: "", results: [] };
   }
   const filtered = FOREX_CATALOG.filter(
     (item) => item.code.includes(q) || item.name.toUpperCase().includes(q)
@@ -624,7 +641,8 @@ const TOP_CRYPTO_LIST = [
 // 9. Crypto Search - PRIMARY: Binance Official -> FALLBACK: Gate.io
 async function handleCryptoSearch(query) {
   const q = (query || "").trim().toUpperCase();
-  const matched = TOP_CRYPTO_LIST.filter((c) => !q || c.includes(q)).slice(0, 15);
+  if (!q) return { query: "", results: [] };
+  const matched = TOP_CRYPTO_LIST.filter((c) => c.includes(q)).slice(0, 15);
 
   if (q && !matched.includes(q)) {
     // 1. Check Binance first
