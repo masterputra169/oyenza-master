@@ -302,7 +302,12 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &m
             continue;
         }
         let q = board.and_then(|b| b.quote(code));
-        let name = q.map(|q| q.name.as_str()).unwrap_or_else(|| crypto::coin_name(code));
+        let name_str = q
+            .map(|q| q.name.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crypto::fallback_name(code));
+        let name = name_str.as_str();
         let dragged = s.drag.as_ref().is_some_and(|(c, _)| c == code);
         let act = draw_row(ui, code, name, q, wl.show, s.edit_k, dragged, *code == wl.pick, row, r, card);
         match act {
@@ -611,7 +616,13 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.notify(Icon::Reset, st.accent, "Refreshing...", &format!("Updating {} chart & prices...", pick), 2.0, None);
     }
 
-    let name = q.as_ref().map(|q| q.name.as_str()).unwrap_or_else(|| crypto::coin_name(&pick));
+    let name_str = q
+        .as_ref()
+        .map(|q| q.name.as_str())
+        .filter(|n| !n.trim().is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| crypto::fallback_name(&pick));
+    let name = name_str.as_str();
     let name_x = refresh_r.right() + 8.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));

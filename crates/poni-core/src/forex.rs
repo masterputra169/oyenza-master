@@ -32,7 +32,7 @@ pub const DEFAULT_SYMBOLS: &[&str] = &[
 ];
 
 /// Top currencies and commodities available for search & addition.
-pub const KNOWN_FOREX_ITEMS: [(&str, &str); 28] = [
+pub const KNOWN_FOREX_ITEMS: [(&str, &str); 64] = [
     ("USD/IDR", "US Dollar"),
     ("GOLD", "Gold (Antam / g)"),
     ("SILVER", "Silver (Spot / g)"),
@@ -61,6 +61,43 @@ pub const KNOWN_FOREX_ITEMS: [(&str, &str); 28] = [
     ("NATURAL_GAS", "Natural Gas (USD)"),
     ("COPPER", "Copper Spot (USD/lb)"),
     ("PALLADIUM", "Palladium Spot (per g)"),
+
+    ("VND/IDR", "Vietnamese Dong (100)"),
+    ("BRL/IDR", "Brazilian Real"),
+    ("RUB/IDR", "Russian Ruble"),
+    ("ZAR/IDR", "South African Rand"),
+    ("MXN/IDR", "Mexican Peso"),
+    ("SEK/IDR", "Swedish Krona"),
+    ("NOK/IDR", "Norwegian Krone"),
+    ("DKK/IDR", "Danish Krone"),
+    ("PLN/IDR", "Polish Zloty"),
+    ("KWD/IDR", "Kuwaiti Dinar"),
+    ("BHD/IDR", "Bahraini Dinar"),
+    ("OMR/IDR", "Omani Rial"),
+    ("QAR/IDR", "Qatari Riyal"),
+    ("EUR/USD", "Euro / US Dollar"),
+    ("GBP/USD", "British Pound / US Dollar"),
+    ("USD/JPY", "US Dollar / Japanese Yen"),
+    ("USD/CHF", "US Dollar / Swiss Franc"),
+    ("AUD/USD", "Australian Dollar / US Dollar"),
+    ("USD/CAD", "US Dollar / Canadian Dollar"),
+    ("NZD/USD", "New Zealand Dollar / US Dollar"),
+    ("EUR/GBP", "Euro / British Pound"),
+    ("EUR/JPY", "Euro / Japanese Yen"),
+    ("GBP/JPY", "British Pound / Japanese Yen"),
+    ("ALUMINUM", "Aluminum Spot (USD/t)"),
+    ("ZINC", "Zinc Spot (USD/t)"),
+    ("NICKEL", "Nickel Spot (USD/t)"),
+    ("LEAD", "Lead Spot (USD/t)"),
+    ("TIN", "Tin Spot (USD/t)"),
+    ("WHEAT", "Wheat Futures (USD/bu)"),
+    ("CORN", "Corn Futures (USD/bu)"),
+    ("SOYBEANS", "Soybean Futures (USD/bu)"),
+    ("COFFEE", "Coffee Futures (USD/lb)"),
+    ("SUGAR", "Sugar Futures (USD/lb)"),
+    ("COCOA", "Cocoa Futures (USD/t)"),
+    ("COTTON", "Cotton Futures (USD/lb)"),
+    ("PALM_OIL", "CPO Crude Palm Oil (MYR/t)"),
 ];
 
 /// The user's persisted Forex & Commodities watchlist.

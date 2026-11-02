@@ -307,6 +307,24 @@ fn fetch_symbol_history(client: &Client, sym: &str, usdidr: f64) -> Option<Vec<(
         "SAR/IDR" => fetch_yahoo_daily(client, "USDIDR=X", 1.0 / 3.75),
         "CNY/IDR" => fetch_yahoo_daily(client, "USDIDR=X", 1.0 / 7.125),
         "OIL" => fetch_yahoo_daily(client, "CL=F", 1.0),
+        "BRENT" => fetch_yahoo_daily(client, "BZ=F", 1.0),
+        "COPPER" => fetch_yahoo_daily(client, "HG=F", 1.0),
+        "NATURAL_GAS" => fetch_yahoo_daily(client, "NG=F", 1.0),
+        "PLATINUM" => {
+            let factor = usdidr / poni_core::forex::TROY_OUNCE_GRAMS;
+            fetch_yahoo_daily(client, "PL=F", factor)
+        }
+        "PALLADIUM" => {
+            let factor = usdidr / poni_core::forex::TROY_OUNCE_GRAMS;
+            fetch_yahoo_daily(client, "PA=F", factor)
+        }
+        "COFFEE" => fetch_yahoo_daily(client, "KC=F", 1.0),
+        "SUGAR" => fetch_yahoo_daily(client, "SB=F", 1.0),
+        "COCOA" => fetch_yahoo_daily(client, "CC=F", 1.0),
+        "COTTON" => fetch_yahoo_daily(client, "CT=F", 1.0),
+        "CORN" => fetch_yahoo_daily(client, "ZC=F", 1.0),
+        "WHEAT" => fetch_yahoo_daily(client, "ZW=F", 1.0),
+        "SOYBEANS" => fetch_yahoo_daily(client, "ZS=F", 1.0),
         "GOLD" => {
             fetch_binance_gold_history(client, usdidr).or_else(|| {
                 let factor = (usdidr / poni_core::forex::TROY_OUNCE_GRAMS) * poni_core::forex::ANTAM_PREMIUM_FACTOR;

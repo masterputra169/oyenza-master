@@ -3023,8 +3023,8 @@ impl App {
             return;
         }
         self.forex_open = open;
-        let chart = if open && self.st.ui.stocks_forex_mode && self.st.store.stocks.range != poni_core::stocks::Range::Day {
-            let pick = self.st.ui.forex_pick.clone().unwrap_or_else(|| "USD/IDR".into());
+        let chart = if open && self.st.store.forex.range != poni_core::stocks::Range::Day {
+            let pick = self.st.ui.forex_pick.clone().unwrap_or_else(|| self.st.store.forex.pick.clone());
             Some(poni_core::forex::normalize_symbol(&pick))
         } else {
             None

@@ -766,9 +766,11 @@ fn forex_chart_line(st: &AppState, q: &poni_core::forex::ForexQuote, range: Rang
                 let start = h.closes.len().saturating_sub(count);
                 h.closes[start..].to_vec()
             } else {
-                Vec::new()
+                let sample = poni_core::forex::sample_history(&q.symbol, poni_core::forex::today_num(), q.rate);
+                let start = sample.closes.len().saturating_sub(count);
+                sample.closes[start..].to_vec()
             };
-            line.key = format!("{}/{}/{}/{}", q.symbol, range.label(), raw_pts.len(), q.rate.to_bits());
+            line.key = format!("{}/{}/{}/{}/{}", q.symbol, range.label(), hist.is_some(), raw_pts.len(), q.rate.to_bits());
             if !raw_pts.is_empty() {
                 line.values = raw_pts.iter().map(|(_, p)| *p).collect();
                 line.labels = raw_pts.iter().enumerate().map(|(i, _)| format!("{}d ago", raw_pts.len().saturating_sub(1 + i))).collect();

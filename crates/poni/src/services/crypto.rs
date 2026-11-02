@@ -160,7 +160,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                                         let spark = spark_cache.get(&item.code.to_ascii_uppercase()).map(|(_, s)| s.clone()).unwrap_or_else(|| crypto::synthetic_spark(&item.code, item.prev_close, item.price, item.low, item.high));
                                         quotes.push(CryptoQuote {
                                             code: item.code.clone(),
-                                            name: crypto::coin_name(&item.code).to_string(),
+                                            name: crypto::fallback_name(&item.code),
                                             price: item.price,
                                             prev_close: item.prev_close,
                                             open: item.prev_close,
@@ -373,9 +373,11 @@ fn parse_binance_tickers(
             last.1 = price as f32;
         }
 
+        let final_name = if !name.is_empty() { name } else { crypto::fallback_name(&code) };
+
         quotes.push(CryptoQuote {
             code,
-            name: if name.is_empty() { sym.to_string() } else { name },
+            name: final_name,
             price,
             prev_close,
             open,
