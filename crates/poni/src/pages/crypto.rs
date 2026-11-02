@@ -306,7 +306,14 @@ fn list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: &m
             .map(|q| q.name.as_str())
             .filter(|n| !n.trim().is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| crypto::fallback_name(code));
+            .unwrap_or_else(|| {
+                let cat = st.catalogs.crypto_name(code);
+                if !cat.is_empty() {
+                    cat.to_string()
+                } else {
+                    crypto::fallback_name(code)
+                }
+            });
         let name = name_str.as_str();
         let dragged = s.drag.as_ref().is_some_and(|(c, _)| c == code);
         let act = draw_row(ui, code, name, q, wl.show, s.edit_k, dragged, *code == wl.pick, row, r, card);
@@ -621,7 +628,14 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         .map(|q| q.name.as_str())
         .filter(|n| !n.trim().is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| crypto::fallback_name(&pick));
+        .unwrap_or_else(|| {
+            let cat = st.catalogs.crypto_name(&pick);
+            if !cat.is_empty() {
+                cat.to_string()
+            } else {
+                crypto::fallback_name(&pick)
+            }
+        });
     let name = name_str.as_str();
     let name_x = refresh_r.right() + 8.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
@@ -936,7 +950,7 @@ fn search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, moving: 
         s.srch_scroll = 0.0;
         s.srch_shown_scroll = 0.0;
     }
-    let matches = crypto::search_coins(&s.query, &st.store.crypto.codes);
+    let matches = st.catalogs.search_crypto(&s.query, &st.store.crypto.codes);
     if !matches.is_empty() {
         s.hit = (s.hit as i32 + moves).clamp(0, matches.len() as i32 - 1) as usize;
     }

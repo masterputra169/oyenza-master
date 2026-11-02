@@ -2988,6 +2988,15 @@ if self.grab.is_some() {
                 self.st.forex.years.insert(hist.symbol.clone(), hist);
                 self.request_frame();
             }
+            AppEvent::CatalogUpdated { kind, items } => {
+                match kind {
+                    "crypto" => self.st.catalogs.crypto = items,
+                    "us_stocks" => self.st.catalogs.us_stocks = items,
+                    "forex" => self.st.catalogs.forex = items,
+                    _ => {}
+                }
+                self.request_frame();
+            }
             AppEvent::UsStocks(board) => {
                 self.st.us_stocks.board = Some(board);
                 self.st.us_stocks.last_fetched = self.st.now;

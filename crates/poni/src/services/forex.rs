@@ -137,6 +137,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
             if let Some(ref client) = http {
+                crate::catalogs::check_remote_catalog(client, "forex", &sink);
                 // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz or Cloudflare Pages)
                 let mut direct_board = None;
                 for endpoint in HUB_ENDPOINTS {

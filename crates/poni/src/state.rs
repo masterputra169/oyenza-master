@@ -948,6 +948,8 @@ pub struct AppState {
     pub notes: poni_core::notes::Taker,
     /// Side effects requested during the frame.
     pub cmds: Vec<Command>,
+    /// Dynamic external catalogs for Crypto, US Stocks, Forex (from Cloudflare cache).
+    pub catalogs: crate::catalogs::CatalogsState,
 }
 
 impl AppState {
@@ -1039,7 +1041,9 @@ impl AppState {
             ielts: Default::default(),
             notes: Default::default(),
             cmds: Vec::new(),
+            catalogs: crate::catalogs::CatalogsState::default(),
         };
+        st.catalogs.load_from_disk();
         // A list from a hand-edited file keeps to codes, each once, ten at most.
         st.store.stocks.tidy();
         // On ones start by checking their files (the worker reports back);

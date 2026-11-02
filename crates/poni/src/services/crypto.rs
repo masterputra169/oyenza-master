@@ -132,6 +132,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             last_ask = Instant::now();
             let mut delivered = false;
             if let Some(ref client) = http {
+                crate::catalogs::check_remote_catalog(client, "crypto", &sink);
                 // Try Centralized Edge Hub (api.dollarkilat.xyz or Cloudflare Pages) first
                 for endpoint in HUB_ENDPOINTS {
                     let dk_url = format!("{endpoint}/v1/crypto/board?symbols={}", watch.codes.join(","));

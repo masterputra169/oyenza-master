@@ -185,6 +185,8 @@ pub enum AppEvent {
     /// Real-time Forex and Gold prices (`services::forex`).
     Forex(poni_core::forex::ForexBoard),
     ForexHistory(poni_core::forex::ForexHistory),
+    /// Catalog updated from external Cloudflare hub (kind: "crypto", "us_stocks", or "forex").
+    CatalogUpdated { kind: &'static str, items: Vec<(String, String)> },
     /// Real-time US Stocks quotes and history (`services::us_stocks`).
     UsStocks(poni_core::us_stocks::UsStockBoard),
     UsStocksHistory { symbol: String, points: Vec<(i32, f64)> },

@@ -42,6 +42,22 @@ pub fn lock_path() -> PathBuf {
     cache_dir().join("poni.lock")
 }
 
+pub fn catalogs_dir() -> PathBuf {
+    cache_dir().join("catalogs")
+}
+
+pub fn crypto_catalog_path() -> PathBuf {
+    catalogs_dir().join("crypto.json")
+}
+
+pub fn us_stocks_catalog_path() -> PathBuf {
+    catalogs_dir().join("us_stocks.json")
+}
+
+pub fn forex_catalog_path() -> PathBuf {
+    catalogs_dir().join("forex.json")
+}
+
 /// Where files from a phone land (Phone drop): `~/Downloads/Oyenza Studio`, or
 /// `~/Downloads/Oyen Poni` where a copy from before the rename made it: Shelf
 /// items link to the files in it.

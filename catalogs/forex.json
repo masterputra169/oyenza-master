@@ -1,0 +1,274 @@
+[
+  [
+    "USD/IDR",
+    "US Dollar"
+  ],
+  [
+    "GOLD",
+    "Gold (Antam / g)"
+  ],
+  [
+    "SILVER",
+    "Silver (Spot / g)"
+  ],
+  [
+    "OIL",
+    "WTI Crude Oil (USD)"
+  ],
+  [
+    "SGD/IDR",
+    "Singapore Dollar"
+  ],
+  [
+    "EUR/IDR",
+    "Euro"
+  ],
+  [
+    "JPY/IDR",
+    "Japanese Yen (100)"
+  ],
+  [
+    "SAR/IDR",
+    "Saudi Riyal"
+  ],
+  [
+    "MYR/IDR",
+    "Malaysian Ringgit"
+  ],
+  [
+    "CNY/IDR",
+    "Chinese Yuan"
+  ],
+  [
+    "AUD/IDR",
+    "Australian Dollar"
+  ],
+  [
+    "GBP/IDR",
+    "British Pound"
+  ],
+  [
+    "CHF/IDR",
+    "Swiss Franc"
+  ],
+  [
+    "CAD/IDR",
+    "Canadian Dollar"
+  ],
+  [
+    "HKD/IDR",
+    "Hong Kong Dollar"
+  ],
+  [
+    "NZD/IDR",
+    "New Zealand Dollar"
+  ],
+  [
+    "KRW/IDR",
+    "South Korean Won (100)"
+  ],
+  [
+    "THB/IDR",
+    "Thai Baht"
+  ],
+  [
+    "INR/IDR",
+    "Indian Rupee"
+  ],
+  [
+    "TWD/IDR",
+    "Taiwan Dollar"
+  ],
+  [
+    "AED/IDR",
+    "UAE Dirham"
+  ],
+  [
+    "PHP/IDR",
+    "Philippine Peso"
+  ],
+  [
+    "PLATINUM",
+    "Platinum Spot (per g)"
+  ],
+  [
+    "BRENT",
+    "Brent Crude Oil (USD)"
+  ],
+  [
+    "NATURAL_GAS",
+    "Natural Gas (USD)"
+  ],
+  [
+    "COPPER",
+    "Copper Spot (USD/lb)"
+  ],
+  [
+    "PALLADIUM",
+    "Palladium Spot (per g)"
+  ],
+  [
+    "VND/IDR",
+    "Vietnamese Dong (100)"
+  ],
+  [
+    "BRL/IDR",
+    "Brazilian Real"
+  ],
+  [
+    "RUB/IDR",
+    "Russian Ruble"
+  ],
+  [
+    "ZAR/IDR",
+    "South African Rand"
+  ],
+  [
+    "TRY/IDR",
+    "Turkish Lira"
+  ],
+  [
+    "MXN/IDR",
+    "Mexican Peso"
+  ],
+  [
+    "SEK/IDR",
+    "Swedish Krona"
+  ],
+  [
+    "NOK/IDR",
+    "Norwegian Krone"
+  ],
+  [
+    "DKK/IDR",
+    "Danish Krone"
+  ],
+  [
+    "PLN/IDR",
+    "Polish Zloty"
+  ],
+  [
+    "HUF/IDR",
+    "Hungarian Forint"
+  ],
+  [
+    "CZK/IDR",
+    "Czech Koruna"
+  ],
+  [
+    "ILS/IDR",
+    "Israeli Shekel"
+  ],
+  [
+    "CLP/IDR",
+    "Chilean Peso"
+  ],
+  [
+    "EGP/IDR",
+    "Egyptian Pound"
+  ],
+  [
+    "PKR/IDR",
+    "Pakistani Rupee"
+  ],
+  [
+    "KWD/IDR",
+    "Kuwaiti Dinar"
+  ],
+  [
+    "QAR/IDR",
+    "Qatari Riyal"
+  ],
+  [
+    "BHD/IDR",
+    "Bahraini Dinar"
+  ],
+  [
+    "OMR/IDR",
+    "Omani Rial"
+  ],
+  [
+    "EUR/USD",
+    "Euro / US Dollar"
+  ],
+  [
+    "GBP/USD",
+    "British Pound / US Dollar"
+  ],
+  [
+    "USD/JPY",
+    "US Dollar / Japanese Yen"
+  ],
+  [
+    "AUD/USD",
+    "Australian Dollar / US Dollar"
+  ],
+  [
+    "USD/CHF",
+    "US Dollar / Swiss Franc"
+  ],
+  [
+    "USD/CAD",
+    "US Dollar / Canadian Dollar"
+  ],
+  [
+    "NZD/USD",
+    "NZ Dollar / US Dollar"
+  ],
+  [
+    "ALUMINUM",
+    "Aluminum Futures (USD/t)"
+  ],
+  [
+    "NICKEL",
+    "Nickel Futures (USD/t)"
+  ],
+  [
+    "ZINC",
+    "Zinc Futures (USD/t)"
+  ],
+  [
+    "LEAD",
+    "Lead Futures (USD/t)"
+  ],
+  [
+    "TIN",
+    "Tin Futures (USD/t)"
+  ],
+  [
+    "URANIUM",
+    "Uranium Futures (USD/lb)"
+  ],
+  [
+    "CORN",
+    "Corn Futures (USD/bu)"
+  ],
+  [
+    "WHEAT",
+    "Wheat Futures (USD/bu)"
+  ],
+  [
+    "SOYBEANS",
+    "Soybean Futures (USD/bu)"
+  ],
+  [
+    "COFFEE",
+    "Coffee Futures (USD/lb)"
+  ],
+  [
+    "SUGAR",
+    "Sugar Futures (USD/lb)"
+  ],
+  [
+    "COCOA",
+    "Cocoa Futures (USD/t)"
+  ],
+  [
+    "COTTON",
+    "Cotton Futures (USD/lb)"
+  ],
+  [
+    "PALM_OIL",
+    "CPO Crude Palm Oil (MYR/t)"
+  ]
+]

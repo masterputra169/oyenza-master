@@ -125,6 +125,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         // Fetch quotes for requested watchlist US stocks
         if let Some(ref client) = http {
+            crate::catalogs::check_remote_catalog(client, "us_stocks", &sink);
             let mut quotes = Vec::new();
 
             // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz or Cloudflare Pages)

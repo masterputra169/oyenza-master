@@ -42,6 +42,22 @@ pub fn lyrics_cache_dir() -> PathBuf {
     cache_dir().join("lyrics")
 }
 
+pub fn catalogs_dir() -> PathBuf {
+    cache_dir().join("catalogs")
+}
+
+pub fn crypto_catalog_path() -> PathBuf {
+    catalogs_dir().join("crypto.json")
+}
+
+pub fn us_stocks_catalog_path() -> PathBuf {
+    catalogs_dir().join("us_stocks.json")
+}
+
+pub fn forex_catalog_path() -> PathBuf {
+    catalogs_dir().join("forex.json")
+}
+
 /// The user's Apple Music token, sealed with DPAPI (never roams; uninstalling
 /// removes it with the cache).
 pub fn apple_music_token_path() -> PathBuf {

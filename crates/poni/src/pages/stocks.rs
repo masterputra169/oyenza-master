@@ -1292,7 +1292,14 @@ fn us_stocks_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, 
     let quotes: Vec<poni_core::us_stocks::UsStockQuote> = st.store.us_stocks.codes.iter().map(|code| {
         board.find(code).cloned().unwrap_or_else(|| poni_core::us_stocks::UsStockQuote {
             symbol: code.clone(),
-            name: poni_core::us_stocks::KNOWN_US_STOCKS.iter().find(|(c, _)| c.eq_ignore_ascii_case(code)).map(|(_, n)| n.to_string()).unwrap_or_else(|| code.clone()),
+            name: {
+                let cat = st.catalogs.us_stock_name(code);
+                if !cat.is_empty() && cat != "US Stock" {
+                    cat.to_string()
+                } else {
+                    poni_core::us_stocks::KNOWN_US_STOCKS.iter().find(|(c, _)| c.eq_ignore_ascii_case(code)).map(|(_, n)| n.to_string()).unwrap_or_else(|| code.clone())
+                }
+            },
             price: 0.0,
             prev: 0.0,
             open: None,
@@ -1587,7 +1594,7 @@ fn us_stocks_search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32
         s.us_srch_scroll = 0.0;
         s.us_srch_shown_scroll = 0.0;
     }
-    let matches = poni_core::us_stocks::search_us_stocks(&s.us_query, &st.store.us_stocks.codes);
+    let matches = st.catalogs.search_us_stocks(&s.us_query, &st.store.us_stocks.codes);
     if !matches.is_empty() {
         s.us_hit = (s.us_hit as i32 + moves).clamp(0, matches.len() as i32 - 1) as usize;
     }

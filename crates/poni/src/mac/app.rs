@@ -1826,6 +1826,15 @@ impl App {
                 self.st.forex.years.insert(hist.symbol.clone(), hist);
                 self.request_frame();
             }
+            AppEvent::CatalogUpdated { kind, items } => {
+                match kind {
+                    "crypto" => self.st.catalogs.crypto = items,
+                    "us_stocks" => self.st.catalogs.us_stocks = items,
+                    "forex" => self.st.catalogs.forex = items,
+                    _ => {}
+                }
+                self.request_frame();
+            }
             AppEvent::Usage(ev) => self.on_usage(ev),
             AppEvent::AdzanEnded => self.adzan_ended(),
             AppEvent::Log(s) => pinfo!("{s}"),

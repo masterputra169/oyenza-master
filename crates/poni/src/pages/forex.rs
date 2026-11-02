@@ -228,7 +228,12 @@ fn forex_list(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, movi
     let board = st.forex.board.clone().unwrap_or_else(poni_core::forex::ForexBoard::default_board);
     let quotes: Vec<poni_core::forex::ForexQuote> = st.store.forex.symbols.iter().map(|sym| {
         board.quote(sym).cloned().unwrap_or_else(|| {
-            let name = poni_core::forex::KNOWN_FOREX_ITEMS.iter().find(|(s, _)| s.eq_ignore_ascii_case(sym)).map(|(_, n)| *n).unwrap_or(sym);
+            let cat_name = st.catalogs.forex_name(sym);
+            let name = if !cat_name.is_empty() {
+                cat_name
+            } else {
+                poni_core::forex::KNOWN_FOREX_ITEMS.iter().find(|(s, _)| s.eq_ignore_ascii_case(sym)).map(|(_, n)| *n).unwrap_or(sym)
+            };
             poni_core::forex::ForexQuote {
                 symbol: sym.clone(),
                 name: name.to_string(),
@@ -524,7 +529,7 @@ fn forex_search(ui: &mut Ui, st: &mut AppState, r: Rect, area: Rect, dt: f32, mo
         s.srch_scroll = 0.0;
         s.srch_shown_scroll = 0.0;
     }
-    let matches = poni_core::forex::search_forex(&s.query, &st.store.forex.symbols);
+    let matches = st.catalogs.search_forex(&s.query, &st.store.forex.symbols);
     if !matches.is_empty() {
         s.hit = (s.hit as i32 + moves).clamp(0, matches.len() as i32 - 1) as usize;
     }
