@@ -62,7 +62,7 @@ pub const KNOWN_FOREX_ITEMS: [(&str, &str); 64] = [
     ("COPPER", "Copper Spot (USD/lb)"),
     ("PALLADIUM", "Palladium Spot (per g)"),
 
-    ("VND/IDR", "Vietnamese Dong (100)"),
+    ("VND/IDR", "Vietnamese Dong (1000)"),
     ("BRL/IDR", "Brazilian Real"),
     ("RUB/IDR", "Russian Ruble"),
     ("ZAR/IDR", "South African Rand"),
@@ -221,7 +221,8 @@ impl ForexQuote {
     }
 
     pub fn is_usd_priced(&self) -> bool {
-        matches!(self.symbol.as_str(), "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS")
+        matches!(self.symbol.as_str(), "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS"
+            | "WHEAT" | "CORN" | "SOYBEANS" | "COFFEE" | "SUGAR" | "COCOA" | "COTTON")
     }
 
     pub fn formatted_rate(&self) -> String {
@@ -263,7 +264,8 @@ impl ForexQuote {
 
 pub fn fmt_quote_val(symbol: &str, val: f64) -> String {
     match symbol.to_ascii_uppercase().as_str() {
-        "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS" => format!("${:.2}", val),
+        "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS"
+            | "WHEAT" | "CORN" | "SOYBEANS" | "COFFEE" | "SUGAR" | "COCOA" | "COTTON" => format!("${:.2}", val),
         "GOLD" | "EMAS" | "XAU/IDR" => fmt_idr(val, true),
         "SILVER" | "PERAK" | "XAG/IDR" => format!("{} /g", fmt_idr(val, false)),
         _ => fmt_idr(val, false),
@@ -550,6 +552,16 @@ pub fn fmt_idr(val: f64, is_gold: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agriculture_quotes_use_dollars_in_the_board_and_ticker() {
+        for symbol in ["WHEAT", "CORN", "SOYBEANS", "COFFEE", "SUGAR", "COCOA", "COTTON"] {
+            assert_eq!(fmt_quote_val(symbol, 5.5), "$5.50");
+            let quote = make_quote(symbol, symbol, 5.5, 1.0, false, "USD");
+            assert!(quote.is_usd_priced());
+            assert!(quote.formatted_change(false).contains('$'));
+        }
+    }
 
     #[test]
     fn calculates_forex_and_gold() {

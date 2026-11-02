@@ -1,5 +1,40 @@
 # DollarKilat Centralized Market Hub (api.dollarkilat.xyz)
 
+## Perbaikan data forex dan komoditas
+
+Domain publik tetap `https://api.dollarkilat.xyz`. Harga board berasal dari chart
+Yahoo Finance; fallback kurs dan logam memakai currency-api (data harian, bukan
+tick realtime). Penyedia gratis dapat menunda harga atau tidak menyediakan simbol.
+Tidak ada harga tetap pengganti saat sumber gagal. `unavailable` berisi simbol
+yang gagal, sedangkan `source`, `stale`, dan `updated_at` per quote menjelaskan
+asal dan usia data. Logam dikonversi ke IDR/gram; GOLD memakai estimasi premium
+1.035, bukan harga jual resmi Antam. JPY/KRW terhadap IDR dihitung per 100,
+VND per 1000. Futures pertanian yang dikutip dalam sen AS dikonversi ke USD.
+
+Kontrak desktop: `quotes[]` memuat `symbol`, `name`, `rate`, `open`, `prev_close`,
+`low`, `high`, `change_pct`, `is_gold`, `unit`, `spark`. Alias lama `code` dan
+`prev_rate` tetap tersedia. History memuat `points` (Unix seconds) serta `closes`
+berupa pasangan `[hari Unix, harga]` sesuai desktop. Tidak ada riwayat sintetis.
+
+Cache upstream 120 detik (history 10 menit, kurs harian 1 jam), berbagi lewat
+Cloudflare Cache API dan cache memori terbatas 128 entri. HTTP 429 menghormati
+`Retry-After`; kegagalan lain dijeda 60 detik. Cache harga terakhir bertahan
+maksimal 24 jam dan ditandai stale tanpa mengganti timestamp. Tidak ada polling
+baru atau dependensi runtime baru. Cache terpisah per edge Cloudflare, sehingga
+bukan pembatas kuota global lintas lokasi.
+
+Edit `forex-source.js`, lalu dari root repo jalankan:
+
+```powershell
+rtk proxy node workers/dollarkilat-api/sync-forex.mjs
+rtk proxy node --test workers/dollarkilat-api/forex.test.mjs
+```
+
+Sinkronisasi mencakup Worker, Pages advanced mode, dan Pages Functions.
+Setelah deploy, uji board dan history pada domain di atas. Paket zip lama tidak
+otomatis berubah; gunakan `deploy-pages/` yang sudah diperbarui jika deploy Pages.
+Perubahan source lokal belum berarti server produksi sudah diperbarui.
+
 Cloudflare Worker serverless proxy & edge cache untuk **Oyenza Master**.
 Menghubungkan dan menampung data dari:
 - **US Stocks** (Quotes realtime, sparkline 5-menit, grafik 1D/1M/6M/1Y, serta pencarian autocomplete untuk **8.000+ saham & ETF AS**).

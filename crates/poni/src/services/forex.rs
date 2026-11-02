@@ -91,7 +91,9 @@ impl Drop for ForexService {
 
 fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let _com = MtaGuard::new();
-    let http = Client::new(USER_AGENT).ok();
+    // Upstream responses can omit cache headers; never retain a Windows disk
+    // cache snapshot across refreshes. Shared caching belongs to the hub.
+    let http = Client::uncached(USER_AGENT).ok();
     let (lock, cvar) = &*state;
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
     let mut history_cache: HashMap<String, Instant> = HashMap::new();
@@ -142,7 +144,8 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 let mut direct_board = None;
                 for endpoint in HUB_ENDPOINTS {
                     let dk_forex_url = format!("{endpoint}/v1/forex/board?symbols={}", watch.symbols.join(","));
-                    if let Ok(resp) = client.get(&dk_forex_url, Duration::from_secs(3)) {
+                    // Hub may need its bounded upstream timeout plus daily FX fallback.
+                    if let Ok(resp) = client.get(&dk_forex_url, Duration::from_secs(10)) {
                         if resp.status == 200 {
                             if let Ok(b) = serde_json::from_str::<ForexBoard>(&resp.body) {
                                 if !b.quotes.is_empty() {
@@ -155,6 +158,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 }
 
                 if let Some(board) = direct_board {
+                    if let Some(q) = board.quote("USD/IDR").filter(|q| q.rate.is_finite() && q.rate > 1000.0) {
+                        latest_idr = q.rate;
+                    }
                     sink.send(AppEvent::Forex(board));
                     board_delivered = true;
                 } else {
@@ -183,10 +189,10 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                                     }
                                 }
                                 if let Some(xau) = usd_obj.get("xau").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
-                                    feeds.gold_usd = Some((1.0 / xau, -0.24));
+                                    feeds.gold_usd = Some((1.0 / xau, 0.0));
                                 }
                                 if let Some(xag) = usd_obj.get("xag").and_then(|x| x.as_f64()).filter(|&x| x > 0.0) {
-                                    feeds.silver_usd = Some((1.0 / xag, 0.45));
+                                    feeds.silver_usd = Some((1.0 / xag, 0.0));
                                 }
                             }
                         }
@@ -198,7 +204,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     if resp.status == 200 {
                         if let Ok(bt) = serde_json::from_str::<BinanceTickerResponse>(&resp.body) {
                             if let Ok(p) = bt.last_price.parse::<f64>() {
-                                let pct = bt.price_change_pct.parse::<f64>().unwrap_or(-0.24);
+                                let pct = bt.price_change_pct.parse::<f64>().unwrap_or(0.0);
                                 feeds.gold_usd = Some((p, pct));
                             }
                         }
@@ -220,7 +226,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 }
                 if let Some((price, prev, sp)) = fetch_yahoo_intraday(client, "CL=F") {
                     if price > 10.0 {
-                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { -0.62 };
+                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { 0.0 };
                         feeds.oil_usd = Some((price, pct));
                         if sp.len() >= 2 {
                             feeds.sparks.insert("OIL".into(), sp);
@@ -229,7 +235,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 }
                 if let Some((price, prev, _)) = fetch_yahoo_intraday(client, "SI=F") {
                     if price > 5.0 {
-                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { 0.45 };
+                        let pct = if prev > 0.0 { (price - prev) / prev * 100.0 } else { 0.0 };
                         feeds.silver_usd = Some((price, pct));
                     }
                 }
@@ -238,20 +244,13 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     latest_idr = idr;
                 }
 
-                    let board = if !rates_map.is_empty() {
-                        if !watch.symbols.is_empty() {
-                            ForexBoard::from_rates_feeds_and_symbols(&rates_map, &feeds, &watch.symbols, now_unix)
-                        } else {
-                            ForexBoard::from_rates_and_feeds(&rates_map, &feeds, now_unix)
-                        }
-                    } else {
-                        ForexBoard::default_board()
-                    };
-                    sink.send(AppEvent::Forex(board));
+                    if let Some(board) = fallback_board(&rates_map, &feeds, &watch.symbols, now_unix) {
+                        sink.send(AppEvent::Forex(board));
+                    }
                     board_delivered = true;
                 }
             } else {
-                sink.send(AppEvent::Forex(ForexBoard::default_board()));
+                // Keep the last delivered board on total outage; defaults are sample data.
                 board_delivered = true;
             }
         }
@@ -264,7 +263,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     let mut history = None;
                     for endpoint in HUB_ENDPOINTS {
                         let dk_hist_url = format!("{endpoint}/v1/forex/history?symbol={sym}&range=1y");
-                        if let Ok(resp) = client.get(&dk_hist_url, Duration::from_secs(3)) {
+                        if let Ok(resp) = client.get(&dk_hist_url, Duration::from_secs(10)) {
                             if resp.status == 200 {
                                 #[derive(serde::Deserialize)]
                                 struct DkForexHist {
@@ -295,6 +294,67 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     }
 }
 
+fn fallback_board(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols: &[String], now: u64) -> Option<ForexBoard> {
+    let has_rate = |code: &str| rates.get(code).is_some_and(|v| v.is_finite() && *v > 0.0);
+    let valid_feed = |feed: Option<(f64, f64)>| feed.is_some_and(|(p, pct)| p.is_finite() && p > 0.0 && pct.is_finite() && pct > -100.0);
+    let requested: Vec<String> = if symbols.is_empty() {
+        poni_core::forex::DEFAULT_SYMBOLS.iter().map(|s| s.to_string()).collect()
+    } else {
+        symbols.iter().map(|s| poni_core::forex::normalize_symbol(s)).collect()
+    };
+    let available: Vec<String> = requested.into_iter().filter(|s| match s.as_str() {
+        "GOLD" => has_rate("IDR") && valid_feed(feeds.gold_usd),
+        "SILVER" => has_rate("IDR") && valid_feed(feeds.silver_usd),
+        "OIL" => valid_feed(feeds.oil_usd),
+        "USD/IDR" => has_rate("IDR"),
+        other => other.strip_suffix("/IDR").is_some_and(|base| has_rate(base) && has_rate("IDR")),
+    }).collect();
+    if available.is_empty() { return None; }
+    let mut board = ForexBoard::from_rates_feeds_and_symbols(rates, feeds, &available, now);
+    for q in &mut board.quotes {
+        // The model fills demo sparklines when no observed series is supplied.
+        q.spark = feeds.sparks.get(&q.symbol).cloned().unwrap_or_default();
+        let pct = match q.symbol.as_str() {
+            "GOLD" => feeds.gold_usd.map(|v| v.1),
+            "SILVER" => feeds.silver_usd.map(|v| v.1),
+            "OIL" => feeds.oil_usd.map(|v| v.1),
+            other => feeds.pcts.get(other).copied(),
+        }.filter(|v| v.is_finite() && *v > -100.0).unwrap_or(0.0);
+        q.change_pct = pct;
+        q.prev_close = q.rate / (1.0 + pct / 100.0);
+        // The model's sample ranges are not observed market highs and lows.
+        q.open = q.spark.first().map_or(q.rate, |p| f64::from(p.1));
+        q.low = q.spark.iter().map(|p| f64::from(p.1)).fold(q.rate, f64::min);
+        q.high = q.spark.iter().map(|p| f64::from(p.1)).fold(q.rate, f64::max);
+    }
+    Some(board)
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    #[test]
+    fn outage_does_not_replace_last_board_with_sample_prices() {
+        assert!(fallback_board(&HashMap::new(), &CommodityFeeds::default(), &["GOLD".into(), "OIL".into()], 10).is_none());
+    }
+
+    #[test]
+    fn partial_feeds_exclude_unavailable_commodities_and_currency_pairs() {
+        let rates = HashMap::from([("IDR".into(), 16000.0), ("EUR".into(), 0.8)]);
+        let feeds = CommodityFeeds { oil_usd: Some((80.0, 2.0)), ..Default::default() };
+        let symbols = ["EUR/IDR", "EUR/USD", "SGD/IDR", "OIL", "GOLD", "BRENT"].map(String::from);
+        let board = fallback_board(&rates, &feeds, &symbols, 10).unwrap();
+        assert_eq!(board.quotes.len(), 2);
+        assert_eq!(board.quote("EUR/IDR").unwrap().rate, 20000.0);
+        assert_eq!(board.quote("EUR/IDR").unwrap().change_pct, 0.0);
+        let eur = board.quote("EUR/IDR").unwrap();
+        assert!(eur.spark.is_empty());
+        assert_eq!((eur.open, eur.low, eur.high), (20000.0, 20000.0, 20000.0));
+        assert_eq!(board.quote("OIL").unwrap().rate, 80.0);
+    }
+}
+
 fn fetch_symbol_history(client: &Client, sym: &str, usdidr: f64) -> Option<Vec<(i32, f64)>> {
     let norm = poni_core::forex::normalize_symbol(sym);
     match norm.as_str() {
@@ -319,13 +379,13 @@ fn fetch_symbol_history(client: &Client, sym: &str, usdidr: f64) -> Option<Vec<(
             let factor = usdidr / poni_core::forex::TROY_OUNCE_GRAMS;
             fetch_yahoo_daily(client, "PA=F", factor)
         }
-        "COFFEE" => fetch_yahoo_daily(client, "KC=F", 1.0),
-        "SUGAR" => fetch_yahoo_daily(client, "SB=F", 1.0),
+        "COFFEE" => fetch_yahoo_daily(client, "KC=F", 0.01),
+        "SUGAR" => fetch_yahoo_daily(client, "SB=F", 0.01),
         "COCOA" => fetch_yahoo_daily(client, "CC=F", 1.0),
-        "COTTON" => fetch_yahoo_daily(client, "CT=F", 1.0),
-        "CORN" => fetch_yahoo_daily(client, "ZC=F", 1.0),
-        "WHEAT" => fetch_yahoo_daily(client, "ZW=F", 1.0),
-        "SOYBEANS" => fetch_yahoo_daily(client, "ZS=F", 1.0),
+        "COTTON" => fetch_yahoo_daily(client, "CT=F", 0.01),
+        "CORN" => fetch_yahoo_daily(client, "ZC=F", 0.01),
+        "WHEAT" => fetch_yahoo_daily(client, "ZW=F", 0.01),
+        "SOYBEANS" => fetch_yahoo_daily(client, "ZS=F", 0.01),
         "GOLD" => {
             fetch_binance_gold_history(client, usdidr).or_else(|| {
                 let factor = (usdidr / poni_core::forex::TROY_OUNCE_GRAMS) * poni_core::forex::ANTAM_PREMIUM_FACTOR;

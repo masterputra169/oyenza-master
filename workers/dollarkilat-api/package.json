@@ -4,6 +4,8 @@
   "description": "Centralized market data aggregator & edge cache for Oyenza Master on api.dollarkilat.xyz",
   "main": "worker.js",
   "scripts": {
+    "test": "node sync-forex.mjs --check && node --test forex.test.mjs",
+    "sync:forex": "node sync-forex.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
