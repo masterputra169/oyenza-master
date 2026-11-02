@@ -17,7 +17,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.21";
 const TIMEOUT: Duration = Duration::from_secs(6);
 const REFRESH_GAP: Duration = Duration::from_secs(120);
+#[allow(dead_code)]
 pub const DOLLARKILAT_ENDPOINT: &str = "https://api.dollarkilat.xyz";
+pub const HUB_ENDPOINTS: &[&str] = &[
+    "https://api.dollarkilat.xyz",
+    "https://oyenza-master-api.pages.dev",
+];
  // 2 minutes while open
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -122,14 +127,17 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
             if let Some(ref client) = http {
-                // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz)
+                // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz or Cloudflare Pages)
                 let mut direct_board = None;
-                let dk_forex_url = format!("{DOLLARKILAT_ENDPOINT}/v1/forex/board?symbols={}", watch.symbols.join(","));
-                if let Ok(resp) = client.get(&dk_forex_url, TIMEOUT) {
-                    if resp.status == 200 {
-                        if let Ok(b) = serde_json::from_str::<ForexBoard>(&resp.body) {
-                            if !b.quotes.is_empty() {
-                                direct_board = Some(b);
+                for endpoint in HUB_ENDPOINTS {
+                    let dk_forex_url = format!("{endpoint}/v1/forex/board?symbols={}", watch.symbols.join(","));
+                    if let Ok(resp) = client.get(&dk_forex_url, Duration::from_secs(3)) {
+                        if resp.status == 200 {
+                            if let Ok(b) = serde_json::from_str::<ForexBoard>(&resp.body) {
+                                if !b.quotes.is_empty() {
+                                    direct_board = Some(b);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -243,15 +251,20 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             if needs_fetch {
                 if let Some(ref client) = http {
                     let mut history = None;
-                    let dk_hist_url = format!("{DOLLARKILAT_ENDPOINT}/v1/forex/history?symbol={sym}&range=1y");
-                    if let Ok(resp) = client.get(&dk_hist_url, TIMEOUT) {
-                        if resp.status == 200 {
-                            #[derive(serde::Deserialize)]
-                            struct DkForexHist {
-                                closes: Vec<(i32, f64)>,
-                            }
-                            if let Ok(parsed) = serde_json::from_str::<DkForexHist>(&resp.body) {
-                                history = Some(parsed.closes);
+                    for endpoint in HUB_ENDPOINTS {
+                        let dk_hist_url = format!("{endpoint}/v1/forex/history?symbol={sym}&range=1y");
+                        if let Ok(resp) = client.get(&dk_hist_url, Duration::from_secs(3)) {
+                            if resp.status == 200 {
+                                #[derive(serde::Deserialize)]
+                                struct DkForexHist {
+                                    closes: Vec<(i32, f64)>,
+                                }
+                                if let Ok(parsed) = serde_json::from_str::<DkForexHist>(&resp.body) {
+                                    if !parsed.closes.is_empty() {
+                                        history = Some(parsed.closes);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }

@@ -17,7 +17,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.22";
 const TIMEOUT: Duration = Duration::from_secs(6);
 const REFRESH_GAP: Duration = Duration::from_secs(60);
+#[allow(dead_code)]
 pub const DOLLARKILAT_ENDPOINT: &str = "https://api.dollarkilat.xyz";
+pub const HUB_ENDPOINTS: &[&str] = &[
+    "https://api.dollarkilat.xyz",
+    "https://oyenza-master-api.pages.dev",
+];
  // 60 seconds while open
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -112,17 +117,20 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
         if let Some(ref client) = http {
             let mut quotes = Vec::new();
 
-            // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz)
-            let dk_url = format!("{DOLLARKILAT_ENDPOINT}/v1/us-stocks/quotes?symbols={}", codes.join(","));
-            if let Ok(resp) = client.get(&dk_url, TIMEOUT) {
-                if resp.status == 200 {
-                    #[derive(serde::Deserialize)]
-                    struct DkUsBoard {
-                        quotes: Vec<UsStockQuote>,
-                    }
-                    if let Ok(board) = serde_json::from_str::<DkUsBoard>(&resp.body) {
-                        if !board.quotes.is_empty() {
-                            quotes = board.quotes;
+            // 1. Primary: Centralized Edge Hub (api.dollarkilat.xyz or Cloudflare Pages)
+            for endpoint in HUB_ENDPOINTS {
+                let dk_url = format!("{endpoint}/v1/us-stocks/quotes?symbols={}", codes.join(","));
+                if let Ok(resp) = client.get(&dk_url, Duration::from_secs(3)) {
+                    if resp.status == 200 {
+                        #[derive(serde::Deserialize)]
+                        struct DkUsBoard {
+                            quotes: Vec<UsStockQuote>,
+                        }
+                        if let Ok(board) = serde_json::from_str::<DkUsBoard>(&resp.body) {
+                            if !board.quotes.is_empty() {
+                                quotes = board.quotes;
+                                break;
+                            }
                         }
                     }
                 }
@@ -176,15 +184,20 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 let should_fetch = history_cache.get(pick).map_or(true, |t| t.elapsed() > Duration::from_secs(1800));
                 if should_fetch {
                     let mut points = Vec::new();
-                    let dk_hist_url = format!("{DOLLARKILAT_ENDPOINT}/v1/us-stocks/history?symbol={pick}&range=1y");
-                    if let Ok(resp) = client.get(&dk_hist_url, TIMEOUT) {
-                        if resp.status == 200 {
-                            #[derive(serde::Deserialize)]
-                            struct DkHist {
-                                closes: Vec<(i32, f64)>,
-                            }
-                            if let Ok(parsed) = serde_json::from_str::<DkHist>(&resp.body) {
-                                points = parsed.closes;
+                    for endpoint in HUB_ENDPOINTS {
+                        let dk_hist_url = format!("{endpoint}/v1/us-stocks/history?symbol={pick}&range=1y");
+                        if let Ok(resp) = client.get(&dk_hist_url, Duration::from_secs(3)) {
+                            if resp.status == 200 {
+                                #[derive(serde::Deserialize)]
+                                struct DkHist {
+                                    closes: Vec<(i32, f64)>,
+                                }
+                                if let Ok(parsed) = serde_json::from_str::<DkHist>(&resp.body) {
+                                    if !parsed.closes.is_empty() {
+                                        points = parsed.closes;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
