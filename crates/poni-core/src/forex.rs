@@ -307,8 +307,7 @@ impl ForexBoard {
     }
 
     pub fn from_rates_feeds_and_symbols(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols: &[String], now_unix: u64) -> Self {
-        let mut idr = *rates.get("IDR").unwrap_or(&16250.0);
-        if idr > 17500.0 { idr = 16250.0; }
+        let idr = *rates.get("IDR").unwrap_or(&18132.0);
         let mut quotes = Vec::with_capacity(symbols.len());
 
         let build = |sym: &str, name: &str, rate: f64, def_pct: f64, is_gold: bool, unit: &str| -> ForexQuote {

@@ -945,7 +945,12 @@ fn forex_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
     let d = value - from;
     let pct = if from > 0.0 { d / from * 100.0 } else { 0.0 };
     let sign = if pct > 0.005 { "+" } else if pct < -0.005 { "−" } else { "" };
-    let chg_str = format!("{sign}{:.2}% · per {}", pct.abs(), q.unit);
+    let unit_label = if q.unit.starts_with("per ") {
+        q.unit.clone()
+    } else {
+        format!("per {}", q.unit)
+    };
+    let chg_str = format!("{sign}{:.2}% · {unit_label}", pct.abs());
     let ccol = if pct > 0.005 { palette::GREEN } else if pct < -0.005 { palette::RED } else { Color::white(0.36) };
     let chg_st = TextStyle::body().weight(Weight::Semibold).tabular().color(ccol);
     let cw2 = ui.c.measure(&chg_str, &chg_st, 250.0).0.ceil();

@@ -378,8 +378,7 @@ async function handleForexBoard(symbols) {
       if (erData?.rates) {
         rates = erData.rates;
         if (erData.rates.IDR) usdIdr = erData.rates.IDR;
-        if (usdIdr > 17500.0) usdIdr = 16250.0;
-      }
+              }
     }
   } catch (_) {}
 
