@@ -923,10 +923,23 @@ fn detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.save();
     }
 
+    // Manual Refresh button
+    let refresh_r = Rect::new(bell_r.right() + 4.0, title.y - 1.0, 22.0, 22.0);
+    let refresh_resp = ui.button(wid("stocks.refresh_btn"), refresh_r);
+    let refresh_col = if refresh_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if refresh_resp.hovered {
+        ui.c.fill_circle(refresh_r.center(), 10.0, Color::white(0.08));
+    }
+    ui.c.icon(Icon::Reset, Rect::from_center(refresh_r.center(), 13.0, 13.0), refresh_col);
+    if refresh_resp.clicked {
+        st.stocks.years.remove(&pick);
+        st.notify(Icon::Reset, st.accent, "Refreshing...", &format!("Updating {} chart...", pick), 2.0, None);
+    }
+
     let name = st.stocks.board.as_ref().and_then(|b| b.quote(&pick)).map(|q| q.name.clone())
         .or_else(|| st.stocks.names.as_ref().and_then(|n| n.name(&pick).map(str::to_string)))
         .unwrap_or_else(|| if index { "IDX Composite".into() } else { String::new() });
-    let name_x = title.x + cw + 56.0;
+    let name_x = refresh_r.right() + 8.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(&name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
     if let Some(pick_range) = range_control(ui, Rect::new(seg_x, title.y, r.right() - seg_x, SEG_H), range) {
@@ -1888,8 +1901,22 @@ fn us_stocks_detail(ui: &mut Ui, st: &mut AppState, r: Rect) {
         st.save();
     }
 
+    // Manual Refresh button
+    let refresh_r = Rect::new(alert_r.right() + 4.0, title.y - 1.0, 22.0, 22.0);
+    let refresh_resp = ui.button(wid("usstocks.refresh_btn"), refresh_r);
+    let refresh_col = if refresh_resp.hovered { palette::TEXT } else { palette::TEXT_FAINT };
+    if refresh_resp.hovered {
+        ui.c.fill_circle(refresh_r.center(), 10.0, Color::white(0.08));
+    }
+    ui.c.icon(Icon::Reset, Rect::from_center(refresh_r.center(), 13.0, 13.0), refresh_col);
+    if refresh_resp.clicked {
+        st.us_stocks.years.remove(&q.symbol);
+        st.us_stocks.refresh_seq = st.us_stocks.refresh_seq.wrapping_add(1);
+        st.notify(Icon::Reset, st.accent, "Refreshing...", &format!("Updating {} chart...", q.symbol), 2.0, None);
+    }
+
     // Company Name directly on top row
-    let name_x = alert_r.right() + 8.0;
+    let name_x = refresh_r.right() + 8.0;
     let name_r = Rect::new(name_x, title.y + 1.0, (seg_x - name_x - 10.0).max(0.0), title.h);
     ui.c.text(&q.name, name_r, &TextStyle::headline().color(palette::TEXT_DIM));
 

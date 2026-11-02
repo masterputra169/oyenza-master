@@ -589,6 +589,7 @@ pub struct CryptoState {
     pub trouble: Option<crate::services::crypto::Trouble>,
     pub years: HashMap<String, poni_core::crypto::CryptoHistory>,
     pub no_year: Vec<String>,
+    pub refresh_seq: u64,
 }
 
 impl CryptoState {
@@ -628,6 +629,7 @@ pub struct ForexState {
     pub board: Option<poni_core::forex::ForexBoard>,
     pub last_fetched: f64,
     pub years: HashMap<String, poni_core::forex::ForexHistory>,
+    pub refresh_seq: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -645,6 +647,7 @@ pub struct UsStocksState {
     pub years: HashMap<String, Vec<(i32, f64)>>,
     pub pick: String,
     pub range: poni_core::stocks::Range,
+    pub refresh_seq: u64,
 }
 
 impl Default for UsStocksState {
@@ -655,6 +658,7 @@ impl Default for UsStocksState {
             years: HashMap::new(),
             pick: "AAPL".to_string(),
             range: poni_core::stocks::Range::Day,
+            refresh_seq: 0,
         }
     }
 }

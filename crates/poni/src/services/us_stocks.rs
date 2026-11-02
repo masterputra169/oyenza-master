@@ -30,6 +30,7 @@ pub struct Watch {
     pub open: bool,
     pub chart: Option<String>,
     pub codes: Vec<String>,
+    pub seq: u64,
 }
 
 pub struct UsStocksService {
@@ -82,6 +83,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
     let mut history_cache: HashMap<String, Instant> = HashMap::new();
     let mut board_delivered = false;
+    let mut last_seq = 0u64;
 
     loop {
         let watch = {
@@ -103,6 +105,14 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         if !watch.open {
             continue;
+        }
+
+        let seq_changed = watch.seq != last_seq;
+        if seq_changed {
+            last_seq = watch.seq;
+            last_ask = Instant::now() - REFRESH_GAP * 2;
+            history_cache.clear();
+            board_delivered = false;
         }
 
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -179,9 +189,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                 board_delivered = true;
             }
 
-            // Historical daily data for selected stock
+            // Historical daily data for selected stock (10m TTL or manual refresh)
             if let Some(ref pick) = watch.chart {
-                let should_fetch = history_cache.get(pick).map_or(true, |t| t.elapsed() > Duration::from_secs(1800));
+                let should_fetch = seq_changed || history_cache.get(pick).map_or(true, |t| t.elapsed() > Duration::from_secs(600));
                 if should_fetch {
                     let mut points = Vec::new();
                     for endpoint in HUB_ENDPOINTS {

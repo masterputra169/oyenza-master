@@ -30,6 +30,7 @@ pub struct Watch {
     pub open: bool,
     pub chart: Option<String>,
     pub symbols: Vec<String>,
+    pub seq: u64,
 }
 
 pub struct ForexService {
@@ -94,8 +95,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let (lock, cvar) = &*state;
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
     let mut history_cache: HashMap<String, Instant> = HashMap::new();
-    let mut latest_idr = 16250.0;
+    let mut latest_idr = 18133.0;
     let mut board_delivered = false;
+    let mut last_seq = 0u64;
 
     loop {
         let watch = {
@@ -117,6 +119,14 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         if !watch.open {
             continue;
+        }
+
+        let seq_changed = watch.seq != last_seq;
+        if seq_changed {
+            last_seq = watch.seq;
+            last_ask = Instant::now() - REFRESH_GAP * 2;
+            history_cache.clear();
+            board_delivered = false;
         }
 
         let elapsed = last_ask.elapsed();
@@ -245,9 +255,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             }
         }
 
-        // Fetch authentic 1Y daily close history for the selected chart
+        // Fetch authentic 1Y daily close history for the selected chart (10m TTL or manual refresh)
         if let Some(ref sym) = watch.chart {
-            let needs_fetch = history_cache.get(sym).map_or(true, |t| t.elapsed() > Duration::from_secs(300));
+            let needs_fetch = seq_changed || history_cache.get(sym).map_or(true, |t| t.elapsed() > Duration::from_secs(600));
             if needs_fetch {
                 if let Some(ref client) = http {
                     let mut history = None;

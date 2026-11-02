@@ -28,6 +28,7 @@ pub struct Watch {
     pub open: bool,
     pub codes: Vec<String>,
     pub chart: Option<String>,
+    pub seq: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +95,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
     let mut last_ask = Instant::now() - REFRESH_GAP * 2;
     let mut history_cache: HashMap<String, Instant> = HashMap::new();
     let mut spark_cache: HashMap<String, (Instant, Vec<(u16, f32)>)> = HashMap::new();
+    let mut last_seq = 0u64;
 
     loop {
         let watch = {
@@ -115,6 +117,14 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 
         if !watch.open {
             continue;
+        }
+
+        let seq_changed = watch.seq != last_seq;
+        if seq_changed {
+            last_seq = watch.seq;
+            last_ask = Instant::now() - REFRESH_GAP * 2;
+            history_cache.clear();
+            spark_cache.clear();
         }
 
         // 1. Fetch 24hr tickers + real 30m intraday sparklines for the watch codes
@@ -233,19 +243,50 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
             }
         }
 
-        // 2. Fetch history for the picked coin if needed
+        // 2. Fetch history for the picked coin if needed (10m TTL or manual refresh)
         if let Some(ref code) = watch.chart {
-            let needs_fetch = history_cache.get(code).map_or(true, |t| t.elapsed() > Duration::from_secs(300));
+            let needs_fetch = seq_changed || history_cache.get(code).map_or(true, |t| t.elapsed() > Duration::from_secs(600));
             if needs_fetch {
                 let symbol = format!("{}USDT", code.to_ascii_uppercase());
                 let query = format!("klines?symbol={symbol}&interval=1d&limit=365");
                 let mut delivered = false;
                 if let Some(ref client) = http {
-                    if let Some(body) = fetch_binance(client, &query) {
-                        if let Ok(hist) = parse_binance_klines(code, &body) {
-                            history_cache.insert(code.clone(), Instant::now());
-                            sink.send(AppEvent::Crypto(CryptoEvent::History(hist)));
-                            delivered = true;
+                    // Try Central Edge Hub first (covers HYPE / Gate.io and bypasses firewall blocks)
+                    for endpoint in HUB_ENDPOINTS {
+                        let dk_url = format!("{endpoint}/v1/crypto/history?symbol={code}&range=1y");
+                        if let Ok(resp) = client.get(&dk_url, Duration::from_secs(3)) {
+                            if resp.status == 200 {
+                                #[derive(serde::Deserialize)]
+                                struct DkCryptoPoint {
+                                    time: i64,
+                                    close: f64,
+                                }
+                                #[derive(serde::Deserialize)]
+                                struct DkCryptoHist {
+                                    points: Vec<DkCryptoPoint>,
+                                }
+                                if let Ok(parsed) = serde_json::from_str::<DkCryptoHist>(&resp.body) {
+                                    if !parsed.points.is_empty() {
+                                        let closes: Vec<(i32, f64)> = parsed.points.into_iter().map(|p| ((p.time / 86400) as i32, p.close)).collect();
+                                        history_cache.insert(code.clone(), Instant::now());
+                                        sink.send(AppEvent::Crypto(CryptoEvent::History(CryptoHistory {
+                                            code: code.clone(),
+                                            closes,
+                                        })));
+                                        delivered = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !delivered {
+                        if let Some(body) = fetch_binance(client, &query) {
+                            if let Ok(hist) = parse_binance_klines(code, &body) {
+                                history_cache.insert(code.clone(), Instant::now());
+                                sink.send(AppEvent::Crypto(CryptoEvent::History(hist)));
+                                delivered = true;
+                            }
                         }
                     }
                 }
