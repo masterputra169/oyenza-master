@@ -225,6 +225,10 @@ impl ForexQuote {
             | "WHEAT" | "CORN" | "SOYBEANS" | "COFFEE" | "SUGAR" | "COCOA" | "COTTON")
     }
 
+    pub fn is_myr_priced(&self) -> bool {
+        self.symbol == "PALM_OIL"
+    }
+
     pub fn formatted_rate(&self) -> String {
         fmt_quote_val(&self.symbol, self.rate)
     }
@@ -250,6 +254,8 @@ impl ForexQuote {
             };
             if self.is_usd_priced() {
                 format!("{sign}${:.2}", diff.abs())
+            } else if self.is_myr_priced() {
+                format!("{sign}RM {:.2}", diff.abs())
             } else {
                 format!("{sign}{}", fmt_idr_plain(diff.abs()))
             }
@@ -266,6 +272,7 @@ pub fn fmt_quote_val(symbol: &str, val: f64) -> String {
     match symbol.to_ascii_uppercase().as_str() {
         "OIL" | "MINYAK" | "WTI" | "BRENT" | "COPPER" | "NATURAL_GAS" | "TEMBAGA" | "GAS"
             | "WHEAT" | "CORN" | "SOYBEANS" | "COFFEE" | "SUGAR" | "COCOA" | "COTTON" => format!("${:.2}", val),
+        "PALM_OIL" => format!("RM {:.2}", val),
         "GOLD" | "EMAS" | "XAU/IDR" => fmt_idr(val, true),
         "SILVER" | "PERAK" | "XAG/IDR" => format!("{} /g", fmt_idr(val, false)),
         _ => fmt_idr(val, false),
@@ -291,7 +298,7 @@ fn poni_core_trend(pct: f64) -> i8 {
     if pct > 0.02 { 1 } else if pct < -0.02 { -1 } else { 0 }
 }
 
-/// Optional live commodity overrides from market feeds (Binance PAXG, Yahoo Finance GC=F, SI=F, CL=F).
+/// Optional live commodity overrides from market feeds.
 #[derive(Clone, Debug, Default)]
 pub struct CommodityFeeds {
     /// Gold spot USD/oz and 24h change %
@@ -304,6 +311,9 @@ pub struct CommodityFeeds {
     pub sparks: HashMap<String, Vec<(u16, f32)>>,
     /// Real 24h change % overrides keyed by symbol
     pub pcts: HashMap<String, f64>,
+    /// Observed quotes for commodities without a built-in currency conversion.
+    /// Missing quotes stay missing; demo defaults are not exposed by the fallback service.
+    pub live_quotes: HashMap<String, ForexQuote>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -367,6 +377,10 @@ impl ForexBoard {
 
         for sym_raw in symbols {
             let sym = normalize_symbol(sym_raw);
+            if let Some(quote) = feeds.live_quotes.get(&sym).filter(|q| q.symbol == sym) {
+                quotes.push(quote.clone());
+                continue;
+            }
             match sym.as_str() {
                 "USD/IDR" => {
                     quotes.push(build("USD/IDR", "US Dollar", idr, 0.12, false, "per 1 USD"));

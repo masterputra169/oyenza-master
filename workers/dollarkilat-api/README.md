@@ -2,9 +2,11 @@
 
 ## Perbaikan data forex dan komoditas
 
-Domain publik tetap `https://api.dollarkilat.xyz`. Harga board berasal dari chart
-Yahoo Finance; fallback kurs dan logam memakai currency-api (data harian, bukan
-tick realtime). Penyedia gratis dapat menunda harga atau tidak menyediakan simbol.
+Domain publik tetap `https://api.dollarkilat.xyz`. Harga futures dan komoditas
+berasal dari chart Yahoo Finance; harga CPO memakai harga harian MPOB untuk CPO
+local delivered dalam MYR/tonne, bukan kontrak futures FCPO. Fallback kurs dan
+logam memakai currency-api (data harian, bukan tick realtime). Penyedia gratis
+dapat menunda harga atau tidak menyediakan simbol.
 Tidak ada harga tetap pengganti saat sumber gagal. `unavailable` berisi simbol
 yang gagal, sedangkan `source`, `stale`, dan `updated_at` per quote menjelaskan
 asal dan usia data. Logam dikonversi ke IDR/gram; GOLD memakai estimasi premium

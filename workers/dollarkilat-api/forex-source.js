@@ -8,7 +8,7 @@ const COMMODITY_TICKERS = {
   GOLD: "GC=F", SILVER: "SI=F", OIL: "CL=F", BRENT: "BZ=F",
   PLATINUM: "PL=F", PALLADIUM: "PA=F", NATURAL_GAS: "NG=F", COPPER: "HG=F",
   WHEAT: "ZW=F", CORN: "ZC=F", SOYBEANS: "ZS=F", COFFEE: "KC=F",
-  SUGAR: "SB=F", COCOA: "CC=F", COTTON: "CT=F", PALM_OIL: "FCPO.KL",
+  SUGAR: "SB=F", COCOA: "CC=F", COTTON: "CT=F",
 };
 function marketSymbol(raw) {
   const symbol = raw.trim().toUpperCase();
@@ -26,7 +26,7 @@ function marketScale(symbol) {
 // Cache provider results rather than whole watchlists, so clients share the same
 // quote. 120s matches the desktop refresh; daily currency data needs only 1h.
 // Keep last-known data for at most 24h and preserve its original timestamp.
-async function marketData(key, url, ttl, parse) {
+async function marketData(key, url, ttl, parse, readBody = response => response.json()) {
   if (marketPending.has(key)) return marketPending.get(key);
   const pending = (async () => {
     const cache = globalThis.caches?.default;
@@ -52,7 +52,7 @@ async function marketData(key, url, ttl, parse) {
         }
         throw new Error("Upstream HTTP " + response.status);
       }
-      const value = parse(await response.json());
+      const value = parse(await readBody(response));
       if (!value) throw new Error("Invalid upstream payload");
       entry = { value, fresh: now + ttl * 1000, expires: now + 86400000, retry: 0 };
     } catch (_) {
@@ -105,18 +105,43 @@ async function marketCurrencies() {
   return null;
 }
 
+async function marketPalmOil() {
+  const url = "https://bepi.mpob.gov.my/admin2/price_local_daily_view_cpo_msia.php?jenis=1W&more=Y";
+  return marketData("mpob:cpo:local-delivered:v1", url, 3600, html => {
+    const text = html.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/gi, " ");
+    const priceText = text.match(/(?:MYR|RM)\s*([\d,]+(?:\.\d{1,2})?)/i)?.[1];
+    const dateText = text.match(/Latest\s+Price:\s*([\d]{1,2}\s+[A-Za-z]+\s+[\d]{4})/i)?.[1];
+    if (!priceText || !dateText) return null;
+    const price = Number(priceText.replaceAll(",", ""));
+    // The heading provides a date but not whether this is the morning or
+    // afternoon revision. Anchor to local midnight to avoid future timestamps.
+    const updatedAt = Date.parse(`${dateText} 00:00:00 GMT+0800`) / 1000;
+    const now = Math.floor(Date.now() / 1000);
+    if (!positive(price) || price < 1000 || price > 20000 || !positive(updatedAt)
+      || updatedAt > now + 86400 || now - updatedAt > 7 * 86400) return null;
+    // MPOB reports a weighted average local-delivered CPO price in MYR/tonne.
+    // It is a daily physical price, not the unavailable FCPO futures ticker.
+    return { price, prev: price, open: price, low: price, high: price, points: [],
+      updated_at: updatedAt, source: "MPOB (daily local-delivered CPO)" };
+  }, response => response.text());
+}
+
 async function handleForexBoard(requested) {
   const symbols = [...new Set(requested.map(marketSymbol))].slice(0, 20);
   const tickers = new Set(symbols.map(marketTicker).filter(Boolean));
   if (symbols.some(symbol => symbol in METAL_FACTORS)) tickers.add("USDIDR=X");
   const results = new Map(await Promise.all([...tickers].map(async ticker => [ticker, await marketChart(ticker)])));
-  const needsDaily = symbols.some(symbol => !results.get(marketTicker(symbol))) || (symbols.some(s => s in METAL_FACTORS) && !results.get("USDIDR=X"));
-  const daily = needsDaily ? await marketCurrencies() : null;
+  const needsDaily = symbols.some(symbol => symbol !== "PALM_OIL" && !results.get(marketTicker(symbol)))
+    || (symbols.some(s => s in METAL_FACTORS) && !results.get("USDIDR=X"));
+  const [daily, palmOil] = await Promise.all([
+    needsDaily ? marketCurrencies() : Promise.resolve(null),
+    symbols.includes("PALM_OIL") ? marketPalmOil() : Promise.resolve(null),
+  ]);
   const idrQuote = results.get("USDIDR=X");
   const idr = idrQuote?.price || daily?.rates.idr;
   const quotes = [];
   for (const symbol of symbols) {
-    let data = results.get(marketTicker(symbol));
+    let data = symbol === "PALM_OIL" ? palmOil : results.get(marketTicker(symbol));
     if (!data && daily) {
       const [base, quote] = symbol.toLowerCase().split("/");
       const a = base === "usd" ? 1 : daily.rates[base];
@@ -136,7 +161,10 @@ async function handleForexBoard(requested) {
       updated = Math.min(updated, idrQuote?.updated_at || daily.updated_at);
       stale ||= !!(idrQuote?.stale || daily?.stale);
     }
-    const catalog = FOREX_CATALOG.find(item => item.code === symbol);
+    const catalog = FOREX_CATALOG.find(item => item.code === symbol)
+      || (symbol === "PALM_OIL"
+        ? { name: "Crude Palm Oil (local delivered)", unit: "per tonne (MYR; daily)" }
+        : null);
     const rate = data.price * factor;
     const prev = data.prev * factor;
     quotes.push({ symbol, code: symbol, name: catalog?.name || symbol, rate,

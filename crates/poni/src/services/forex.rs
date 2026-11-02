@@ -8,13 +8,13 @@
 
 use crate::events::{AppEvent, EventSink};
 use crate::services::http::{Client, MtaGuard};
-use poni_core::forex::{CommodityFeeds, ForexBoard};
+use poni_core::forex::{CommodityFeeds, ForexBoard, ForexQuote};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.21";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OyenzaStudio/0.2.24";
 const TIMEOUT: Duration = Duration::from_secs(6);
 const REFRESH_GAP: Duration = Duration::from_secs(120);
 #[allow(dead_code)]
@@ -157,9 +157,31 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     }
                 }
 
-                if let Some(board) = direct_board {
+                if let Some(mut board) = direct_board {
                     if let Some(q) = board.quote("USD/IDR").filter(|q| q.rate.is_finite() && q.rate > 1000.0) {
                         latest_idr = q.rate;
+                    }
+                    let missing = missing_live_market_symbols(&board.quotes, &watch.symbols);
+                    let live_idr = board.quote("USD/IDR")
+                        .map(|q| q.rate)
+                        .filter(|rate| rate.is_finite() && *rate > 1000.0)
+                        .or_else(|| {
+                            if missing.iter().any(|symbol| symbol == "PALLADIUM") {
+                                fetch_yahoo_intraday(client, "USDIDR=X")
+                                    .map(|(price, _, _)| price)
+                                    .filter(|rate| rate.is_finite() && *rate > 1000.0)
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(rate) = live_idr {
+                        latest_idr = rate;
+                    }
+                    let supplements = fetch_requested_market_quotes(client, &missing, live_idr, now_unix);
+                    for symbol in missing {
+                        if let Some(quote) = supplements.get(&symbol) {
+                            board.quotes.push(quote.clone());
+                        }
                     }
                     sink.send(AppEvent::Forex(board));
                     board_delivered = true;
@@ -244,6 +266,9 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     latest_idr = idr;
                 }
 
+                let live_idr = rates_map.get("IDR").copied().filter(|&x| x.is_finite() && x > 1000.0);
+                feeds.live_quotes = fetch_requested_market_quotes(client, &watch.symbols, live_idr, now_unix);
+
                     if let Some(board) = fallback_board(&rates_map, &feeds, &watch.symbols, now_unix) {
                         sink.send(AppEvent::Forex(board));
                     }
@@ -297,6 +322,11 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
 fn fallback_board(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols: &[String], now: u64) -> Option<ForexBoard> {
     let has_rate = |code: &str| rates.get(code).is_some_and(|v| v.is_finite() && *v > 0.0);
     let valid_feed = |feed: Option<(f64, f64)>| feed.is_some_and(|(p, pct)| p.is_finite() && p > 0.0 && pct.is_finite() && pct > -100.0);
+    let valid_live_quote = |symbol: &str| feeds.live_quotes.get(symbol).is_some_and(|q| {
+        q.rate.is_finite() && q.rate > 0.0 && q.prev_close.is_finite() && q.prev_close > 0.0
+            && q.change_pct.is_finite() && q.change_pct > -100.0
+            && q.low.is_finite() && q.low > 0.0 && q.high.is_finite() && q.high >= q.low
+    });
     let requested: Vec<String> = if symbols.is_empty() {
         poni_core::forex::DEFAULT_SYMBOLS.iter().map(|s| s.to_string()).collect()
     } else {
@@ -307,11 +337,15 @@ fn fallback_board(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols:
         "SILVER" => has_rate("IDR") && valid_feed(feeds.silver_usd),
         "OIL" => valid_feed(feeds.oil_usd),
         "USD/IDR" => has_rate("IDR"),
+        other if valid_live_quote(other) => true,
         other => other.strip_suffix("/IDR").is_some_and(|base| has_rate(base) && has_rate("IDR")),
     }).collect();
     if available.is_empty() { return None; }
     let mut board = ForexBoard::from_rates_feeds_and_symbols(rates, feeds, &available, now);
     for q in &mut board.quotes {
+        if feeds.live_quotes.contains_key(&q.symbol) {
+            continue;
+        }
         // The model fills demo sparklines when no observed series is supplied.
         q.spark = feeds.sparks.get(&q.symbol).cloned().unwrap_or_default();
         let pct = match q.symbol.as_str() {
@@ -328,6 +362,148 @@ fn fallback_board(rates: &HashMap<String, f64>, feeds: &CommodityFeeds, symbols:
         q.high = q.spark.iter().map(|p| f64::from(p.1)).fold(q.rate, f64::max);
     }
     Some(board)
+}
+
+fn missing_live_market_symbols(quotes: &[ForexQuote], symbols: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    symbols.iter().filter_map(|raw| {
+        let symbol = poni_core::forex::normalize_symbol(raw);
+        let supported = matches!(symbol.as_str(), "BRENT" | "PALLADIUM" | "COPPER" | "PALM_OIL");
+        let available = quotes.iter().any(|q| q.symbol == symbol && q.rate.is_finite() && q.rate > 0.0);
+        (supported && !available && seen.insert(symbol.clone())).then_some(symbol)
+    }).collect()
+}
+
+fn fetch_requested_market_quotes(client: &Client, symbols: &[String], live_idr: Option<f64>, now: u64) -> HashMap<String, ForexQuote> {
+    let requested: HashSet<String> = symbols.iter()
+        .map(|s| poni_core::forex::normalize_symbol(s))
+        .collect();
+    let mut quotes = HashMap::new();
+    for (symbol, ticker, name, unit) in [
+        ("BRENT", "BZ=F", "Brent Crude Oil", "per barrel (USD)"),
+        ("PALLADIUM", "PA=F", "Palladium Spot / g", "per 1 gram"),
+        ("COPPER", "HG=F", "Copper Spot", "per lb (USD)"),
+    ] {
+        if !requested.contains(symbol) || (symbol == "PALLADIUM" && live_idr.is_none()) {
+            continue;
+        }
+        let factor = if symbol == "PALLADIUM" {
+            live_idr.unwrap() / poni_core::forex::TROY_OUNCE_GRAMS
+        } else {
+            1.0
+        };
+        if let Some((price, prev, spark)) = fetch_yahoo_intraday(client, ticker) {
+            if let Some(quote) = make_live_quote(symbol, name, unit, factor, price, prev, &spark) {
+                quotes.insert(symbol.into(), quote);
+            }
+        }
+    }
+    if requested.contains("PALM_OIL") {
+        if let Some(quote) = fetch_mpob_cpo(client, now) {
+            quotes.insert("PALM_OIL".into(), quote);
+        }
+    }
+    quotes
+}
+
+fn make_live_quote(symbol: &str, name: &str, unit: &str, factor: f64, price: f64, prev: f64, spark: &[(u16, f32)]) -> Option<ForexQuote> {
+    if !factor.is_finite() || factor <= 0.0 || !price.is_finite() || price <= 0.0 || !prev.is_finite() || prev <= 0.0 {
+        return None;
+    }
+    let rate = price * factor;
+    let prev_close = prev * factor;
+    if !rate.is_finite() || rate <= 0.0 || !prev_close.is_finite() || prev_close <= 0.0 {
+        return None;
+    }
+    let spark: Vec<(u16, f32)> = spark.iter().filter_map(|(time, value)| {
+        let scaled = f64::from(*value) * factor;
+        (scaled.is_finite() && scaled > 0.0 && scaled <= f64::from(f32::MAX))
+            .then_some((*time, scaled as f32))
+    }).collect();
+    let change_pct = (rate / prev_close - 1.0) * 100.0;
+    let baseline_low = rate.min(prev_close);
+    let baseline_high = rate.max(prev_close);
+    let low = spark.iter().map(|p| f64::from(p.1)).fold(baseline_low, f64::min);
+    let high = spark.iter().map(|p| f64::from(p.1)).fold(baseline_high, f64::max);
+    let open = spark.first().map_or(prev_close, |p| f64::from(p.1));
+    Some(ForexQuote {
+        symbol: symbol.into(), name: name.into(), rate, open, prev_close, low, high,
+        change_pct, is_gold: false, unit: unit.into(), spark,
+    })
+}
+
+fn fetch_mpob_cpo(client: &Client, now: u64) -> Option<ForexQuote> {
+    let url = "https://bepi.mpob.gov.my/admin2/price_local_daily_view_cpo_msia.php?jenis=1W&more=Y";
+    let response = client.get(url, TIMEOUT).ok()?;
+    if response.status != 200 {
+        return None;
+    }
+    parse_mpob_cpo(&response.body, now)
+}
+
+fn parse_mpob_cpo(html: &str, now: u64) -> Option<ForexQuote> {
+    let mut plain = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => plain.push(ch),
+            _ => {}
+        }
+    }
+    let plain = plain.replace("&nbsp;", " ").replace("&#39;", "'");
+    let upper = plain.to_ascii_uppercase();
+    let currency_at = upper.find("MYR")? + 3;
+    let price_text: String = plain[currency_at..].trim_start().chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '.')
+        .collect();
+    let price = price_text.replace(',', "").parse::<f64>().ok()?;
+    if !price.is_finite() || !(1000.0..=20000.0).contains(&price) {
+        return None;
+    }
+
+    let latest = plain.split_once("Latest Price:")?.1;
+    let mut date_parts = latest.split_whitespace();
+    let day = date_parts.next()?.parse::<u32>().ok()?;
+    let month = match date_parts.next()?.to_ascii_lowercase().as_str() {
+        "january" => 1, "february" => 2, "march" => 3, "april" => 4,
+        "may" => 5, "june" => 6, "july" => 7, "august" => 8,
+        "september" => 9, "october" => 10, "november" => 11, "december" => 12,
+        _ => return None,
+    };
+    let year = date_parts.next()?.parse::<i64>().ok()?;
+    if !(1..=31).contains(&day) || !(1970..=2200).contains(&year) {
+        return None;
+    }
+    let year = year - (month <= 2) as i64;
+    let era = year / 400;
+    let year_of_era = year - era * 400;
+    let adjusted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days_since_epoch = era * 146097 + day_of_era - 719468;
+    // The page gives a date but not the revision time; use Malaysia local midnight.
+    let updated_at = days_since_epoch * 86400 - 8 * 3600;
+    if updated_at <= 0 || updated_at as u64 > now.saturating_add(86400)
+        || now.saturating_sub(updated_at as u64) > 7 * 86400
+    {
+        return None;
+    }
+
+    Some(ForexQuote {
+        symbol: "PALM_OIL".into(),
+        name: "Crude Palm Oil (local delivered)".into(),
+        rate: price,
+        open: price,
+        prev_close: price,
+        low: price,
+        high: price,
+        change_pct: 0.0,
+        is_gold: false,
+        unit: "per tonne (MYR; daily)".into(),
+        spark: Vec::new(),
+    })
 }
 
 #[cfg(test)]
