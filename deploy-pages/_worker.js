@@ -150,6 +150,13 @@ export default {
         return jsonResponse(data, 3600);
       }
 
+      // 10. Crypto 1Y Daily History
+      if (path === "/v1/crypto/history") {
+        const symbol = (url.searchParams.get("symbol") || "BTC").trim().toUpperCase();
+        const data = await handleCryptoHistory(symbol);
+        return jsonResponse(data, 600);
+      }
+
       if (env && env.ASSETS) {
         return await env.ASSETS.fetch(request);
       }
@@ -665,4 +672,81 @@ async function handleCryptoSearch(query) {
   }
 
   return { query: q, results: matched };
+}
+
+// 10. Crypto 1Y Daily History - PRIMARY: Binance -> FALLBACK: Gate.io -> FALLBACK: Yahoo Finance
+async function handleCryptoHistory(symbol) {
+  const sym = symbol.toUpperCase();
+  const pair = `${sym}USDT`;
+  let points = [];
+
+  // 1. Try Binance Vision / Binance API first
+  for (const base of ["https://data-api.binance.vision/api/v3", "https://api.binance.com/api/v3"]) {
+    try {
+      const res = await fetch(`${base}/klines?symbol=${pair}&interval=1d&limit=365`, {
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          for (const r of rows) {
+            const timeSec = Math.floor(r[0] / 1000);
+            const closeVal = parseFloat(r[4]);
+            if (!isNaN(closeVal) && closeVal > 0) {
+              points.push({ time: timeSec, close: closeVal });
+            }
+          }
+          if (points.length > 0) {
+            return { symbol: sym, points, updated_at: Math.floor(Date.now() / 1000) };
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Try Gate.io for coins like HYPE
+  try {
+    const gateRes = await fetch(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${sym}_USDT&interval=1d&limit=365`, {
+      headers: { "User-Agent": USER_AGENT },
+    });
+    if (gateRes.ok) {
+      const rows = await gateRes.json();
+      if (Array.isArray(rows) && rows.length > 0) {
+        for (const r of rows) {
+          const timeSec = parseInt(r[0], 10);
+          const closeVal = parseFloat(r[2]);
+          if (!isNaN(closeVal) && closeVal > 0) {
+            points.push({ time: timeSec, close: closeVal });
+          }
+        }
+        if (points.length > 0) {
+          points.sort((a, b) => a.time - b.time);
+          return { symbol: sym, points, updated_at: Math.floor(Date.now() / 1000) };
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3. Try Yahoo Finance (e.g. BTC-USD, SOL-USD)
+  try {
+    const yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym + "-USD")}?range=1y&interval=1d`;
+    const yRes = await fetch(yUrl, { headers: { "User-Agent": USER_AGENT } });
+    if (yRes.ok) {
+      const json = await yRes.json();
+      const result = json?.chart?.result?.[0];
+      const timestamps = result?.timestamp || [];
+      const closes = result?.indicators?.quote?.[0]?.close || [];
+      for (let i = 0; i < timestamps.length; i++) {
+        const c = closes[i];
+        if (c !== null && !isNaN(c) && c > 0) {
+          points.push({ time: timestamps[i], close: c });
+        }
+      }
+      if (points.length > 0) {
+        return { symbol: sym, points, updated_at: Math.floor(Date.now() / 1000) };
+      }
+    }
+  } catch (_) {}
+
+  return { symbol: sym, points: [], updated_at: Math.floor(Date.now() / 1000) };
 }

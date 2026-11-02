@@ -291,8 +291,7 @@ fn worker(state: Arc<(Mutex<WorkerState>, Condvar)>, sink: EventSink) {
                     }
                 }
                 if !delivered {
-                    let sample = crypto::sample_history(code, crypto::today_num(), 77630.0);
-                    sink.send(AppEvent::Crypto(CryptoEvent::History(sample)));
+                    sink.send(AppEvent::Crypto(CryptoEvent::NoHistory(code.clone())));
                 }
             }
         }
